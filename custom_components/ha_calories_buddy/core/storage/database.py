@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -16,6 +17,31 @@ from custom_components.ha_calories_buddy.core.logging import get_logger, log_eve
 
 _LOGGER = get_logger(__name__)
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+
+
+_ALTER_ADD_COL_RE = re.compile(
+    r"^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+    re.IGNORECASE,
+)
+
+
+async def _column_exists(
+    conn: aiosqlite.Connection, table_name: str, column_name: str
+) -> bool:
+    """Return True if column_name already exists on table_name."""
+    async with conn.execute(f"PRAGMA table_info({table_name})") as cursor:
+        rows = await cursor.fetchall()
+    target = column_name.lower()
+    return any(str(row[1]).lower() == target for row in rows)
+
+
+def _split_sql_statements(sql_script: str) -> list[str]:
+    """Strip SQL line comments and split semicolon-delimited DDL statements."""
+    clean_lines = [
+        line for line in sql_script.splitlines() if not line.lstrip().startswith("--")
+    ]
+    cleaned = "\n".join(clean_lines)
+    return [stmt.strip() for stmt in cleaned.split(";") if stmt.strip()]
 
 
 class Database:
@@ -94,38 +120,41 @@ class Database:
             await conn.execute(query, params)
 
     async def _apply_migrations(self) -> None:
-        """Apply ordered *.sql files from migrations/ that have not yet been recorded."""
+        """Apply ordered *.sql files from migrations/ idempotently under the write lock."""
         conn = self.connection
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            )
-            """
-        )
-        await conn.commit()
-
-        applied_rows = await self.fetch_all("SELECT version FROM schema_migrations")
-        applied_versions = {int(row["version"]) for row in applied_rows}
-
         migration_files = await asyncio.to_thread(
             lambda: sorted(MIGRATIONS_DIR.glob("*.sql"))
         )
+        file_contents: list[tuple[int, str]] = []
         for migration_file in migration_files:
             version_str = migration_file.name.split("_", maxsplit=1)[0]
             if not version_str.isdigit():
                 continue
-            version = int(version_str)
-            if version in applied_versions:
-                continue
-
             sql_script = await asyncio.to_thread(
                 migration_file.read_text, encoding="utf-8"
             )
-            async with self._write_lock:
+            file_contents.append((int(version_str), sql_script))
+
+        async with self._write_lock:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                )
+                """
+            )
+            await conn.commit()
+
+            async with conn.execute("SELECT version FROM schema_migrations") as cursor:
+                applied_rows = await cursor.fetchall()
+            applied_versions = {int(row["version"]) for row in applied_rows}
+
+            for version, sql_script in file_contents:
+                if version in applied_versions:
+                    continue
                 try:
-                    await conn.executescript(sql_script)
+                    await self._execute_migration_script(conn, sql_script)
                     await conn.execute(
                         "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                         (version, datetime.now(UTC).isoformat()),
@@ -140,3 +169,17 @@ class Database:
                 except Exception:
                     await conn.rollback()
                     raise
+
+    @staticmethod
+    async def _execute_migration_script(
+        conn: aiosqlite.Connection, sql_script: str
+    ) -> None:
+        """Execute migration DDL, skipping ALTER ADD COLUMN if already present."""
+        statements = _split_sql_statements(sql_script)
+        for stmt in statements:
+            match = _ALTER_ADD_COL_RE.match(stmt)
+            if match:
+                table_name, col_name = match.group(1), match.group(2)
+                if await _column_exists(conn, table_name, col_name):
+                    continue
+            await conn.execute(stmt)

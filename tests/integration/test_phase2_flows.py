@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import timedelta
 from typing import Any
@@ -12,22 +13,32 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockUser
+from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from custom_components.ha_calories_buddy.const import (
+    CONF_ACTIVITY_LEVEL,
     CONF_AI_TASK_ENTITY,
+    CONF_BIRTH_YEAR,
     CONF_DISPLAY_NAME,
+    CONF_GOAL_TYPE,
     CONF_HA_USER_ID,
+    CONF_HEIGHT_CM,
+    CONF_INITIAL_WEIGHT_KG,
     CONF_LANGUAGE,
     CONF_LANGUAGE_OVERRIDE,
     CONF_LLM_PROVIDER,
     CONF_MEAL_SLOTS,
     CONF_PERSON_ID,
+    CONF_SEX,
+    CONF_TARGET_MODE,
+    CONF_TDEE_ENGINE,
     DOMAIN,
     ENTRY_KIND,
     ENTRY_KIND_HUB,
+    ENTRY_KIND_PERSON,
     LLM_PROVIDER_HA_AI_TASK,
+    LLM_PROVIDER_NONE,
 )
 from custom_components.ha_calories_buddy.core.llm.prompts.meal_plan import (
     DayPlanProposalSchema,
@@ -452,3 +463,63 @@ async def test_end_to_end_phase2_plan_calendar_rebalance_promote_and_preferences
     events_today = cal_after[cal_entity_id]["events"]
     assert any("🍽️" in ev["summary"] and "Pranzo" in ev["summary"] for ev in events_today)
     assert pref_id
+
+
+async def test_concurrent_hub_and_person_setup_no_race(hass: HomeAssistant) -> None:
+    """Verify concurrent async_setup of Hub + Person shares one locked runtime cleanly."""
+    hub_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Calories Buddy — Household Hub",
+        unique_id="hub_race",
+        data={
+            ENTRY_KIND: ENTRY_KIND_HUB,
+            CONF_LANGUAGE: "it",
+            CONF_LLM_PROVIDER: LLM_PROVIDER_NONE,
+        },
+    )
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Calories Buddy — RaceUser",
+        unique_id="person_race",
+        data={
+            ENTRY_KIND: ENTRY_KIND_PERSON,
+            CONF_PERSON_ID: "person_race",
+            CONF_DISPLAY_NAME: "RaceUser",
+            CONF_HA_USER_ID: "uid_race",
+            CONF_LANGUAGE_OVERRIDE: "inherit",
+            CONF_SEX: "male",
+            CONF_BIRTH_YEAR: 1990,
+            CONF_HEIGHT_CM: 178.0,
+            CONF_INITIAL_WEIGHT_KG: 75.0,
+            CONF_TARGET_MODE: "physiology",
+            CONF_GOAL_TYPE: "maintain",
+            CONF_TDEE_ENGINE: "static",
+            CONF_ACTIVITY_LEVEL: "moderate",
+        },
+    )
+    hub_entry.add_to_hass(hass)
+    person_entry.add_to_hass(hass)
+
+    # Launch Person and Hub setup concurrently (Person intentionally scheduled first)
+    p_ok, h_ok = await asyncio.gather(
+        hass.config_entries.async_setup(person_entry.entry_id),
+        hass.config_entries.async_setup(hub_entry.entry_id),
+    )
+    await hass.async_block_till_done()
+
+    assert p_ok is True
+    assert h_ok is True
+    runtime = hass.data[DOMAIN]
+    assert runtime.persons["person_race"].profile.language == "it"
+
+    ent_reg = er.async_get(hass)
+    sensors = [
+        e
+        for e in er.async_entries_for_config_entry(ent_reg, person_entry.entry_id)
+        if e.domain == "sensor"
+    ]
+    assert len(sensors) == 10
+    for ent in sensors:
+        st = hass.states.get(ent.entity_id)
+        assert st is not None
+        assert st.state not in {"unavailable", "unknown"}

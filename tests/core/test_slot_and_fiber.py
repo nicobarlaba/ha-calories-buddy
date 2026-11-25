@@ -313,3 +313,25 @@ async def test_vault_pagination_categories_and_meal_slot_edit(
     moved = await logging_svc.change_meal_slot(profile, logged.meal_log.log_id, "Cena")
     assert moved is not None
     assert moved.meal_slot == "Cena"
+
+
+async def test_database_migrations_idempotent_with_preexisting_column(
+    tmp_path: Path,
+) -> None:
+    """Verify migration 002 safely succeeds even if ALTER TABLE columns already exist."""
+    db_path = tmp_path / "partial_migration.db"
+    db1 = Database(db_path)
+    await db1.initialize()
+    # Simulate a DB where migration 002 columns exist but schema_migrations missed version 2
+    await db1.execute("DELETE FROM schema_migrations WHERE version = 2")
+    await db1.close()
+
+    db2 = Database(db_path)
+    await db2.initialize()
+    try:
+        row = await db2.fetch_one(
+            "SELECT version FROM schema_migrations WHERE version = 2"
+        )
+        assert row is not None
+    finally:
+        await db2.close()

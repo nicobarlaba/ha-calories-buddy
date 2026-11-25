@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -263,73 +264,91 @@ def _build_person_profile(
 
 
 async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
-    if DOMAIN in hass.data:
-        existing: DomainRuntime = hass.data[DOMAIN]
-        return existing
+    lock: asyncio.Lock = hass.data.setdefault(f"{DOMAIN}_init_lock", asyncio.Lock())
+    async with lock:
+        if DOMAIN in hass.data:
+            existing: DomainRuntime = hass.data[DOMAIN]
+            return existing
 
-    db_path = hass.config.path(".storage", STORAGE_DB_FILENAME)
-    db = Database(db_path)
-    await db.initialize()
-    await seed_database_if_empty(db)
+        db_path = hass.config.path(".storage", STORAGE_DB_FILENAME)
+        db = Database(db_path)
+        await db.initialize()
+        await seed_database_if_empty(db)
 
-    session = async_get_clientsession(hass)
-    food_repo = FoodRepository(db)
-    meal_repo = MealRepository(db)
-    profile_repo = ProfileRepository(db)
-    preference_repo = PreferenceRepository(db)
-    plan_repo = MealPlanRepository(db)
-    preference_engine = PreferenceEngine(preference_repo, meal_repo)
-    off_provider = OpenFoodFactsProvider(session)
-    usda_provider = USDAProvider(session, api_key=None)
-    resolver = FoodResolver(food_repo, off_provider=off_provider, usda_provider=usda_provider)
+        session = async_get_clientsession(hass)
+        food_repo = FoodRepository(db)
+        meal_repo = MealRepository(db)
+        profile_repo = ProfileRepository(db)
+        preference_repo = PreferenceRepository(db)
+        plan_repo = MealPlanRepository(db)
+        preference_engine = PreferenceEngine(preference_repo, meal_repo)
+        off_provider = OpenFoodFactsProvider(session)
+        usda_provider = USDAProvider(session, api_key=None)
+        resolver = FoodResolver(food_repo, off_provider=off_provider, usda_provider=usda_provider)
 
-    placeholder_logging = MealLoggingService(
-        meal_repo=meal_repo,
-        food_repo=food_repo,
-        resolver=resolver,
-        llm_client_getter=lambda _p: None,
-    )
-    placeholder_planner = MealPlannerService(
-        plan_repo=plan_repo,
-        meal_repo=meal_repo,
-        preference_engine=preference_engine,
-        resolver=resolver,
-        llm_client_getter=lambda _p: None,
-    )
-    placeholder_rebalancer = MealRebalancerService(
-        plan_repo=plan_repo,
-        meal_repo=meal_repo,
-        resolver=resolver,
-        planner_service=placeholder_planner,
-    )
+        placeholder_logging = MealLoggingService(
+            meal_repo=meal_repo,
+            food_repo=food_repo,
+            resolver=resolver,
+            llm_client_getter=lambda _p: None,
+        )
+        placeholder_planner = MealPlannerService(
+            plan_repo=plan_repo,
+            meal_repo=meal_repo,
+            preference_engine=preference_engine,
+            resolver=resolver,
+            llm_client_getter=lambda _p: None,
+        )
+        placeholder_rebalancer = MealRebalancerService(
+            plan_repo=plan_repo,
+            meal_repo=meal_repo,
+            resolver=resolver,
+            planner_service=placeholder_planner,
+        )
 
-    runtime = DomainRuntime(
-        hass=hass,
-        db=db,
-        food_repo=food_repo,
-        meal_repo=meal_repo,
-        profile_repo=profile_repo,
-        preference_repo=preference_repo,
-        plan_repo=plan_repo,
-        preference_engine=preference_engine,
-        session=session,
-        off_provider=off_provider,
-        usda_provider=usda_provider,
-        resolver=resolver,
-        logging_service=placeholder_logging,
-        planner_service=placeholder_planner,
-        rebalancer_service=placeholder_rebalancer,
-    )
-    runtime.update_usda_api_key(None)
+        runtime = DomainRuntime(
+            hass=hass,
+            db=db,
+            food_repo=food_repo,
+            meal_repo=meal_repo,
+            profile_repo=profile_repo,
+            preference_repo=preference_repo,
+            plan_repo=plan_repo,
+            preference_engine=preference_engine,
+            session=session,
+            off_provider=off_provider,
+            usda_provider=usda_provider,
+            resolver=resolver,
+            logging_service=placeholder_logging,
+            planner_service=placeholder_planner,
+            rebalancer_service=placeholder_rebalancer,
+        )
+        runtime.update_usda_api_key(None)
 
-    async def _on_ha_stop(_event: Event) -> None:
-        await db.close()
+        async def _on_ha_stop(_event: Event) -> None:
+            await db.close()
 
-    runtime.stop_unsub = hass.bus.async_listen_once(
-        EVENT_HOMEASSISTANT_STOP, _on_ha_stop
-    )
-    hass.data[DOMAIN] = runtime
-    return runtime
+        runtime.stop_unsub = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP, _on_ha_stop
+        )
+
+        if not runtime.frontend_registered:
+            await async_register_frontend(hass)
+            runtime.frontend_registered = True
+
+        if not runtime.services_registered:
+            async_register_services(hass)
+            runtime.services_registered = True
+
+        if not runtime.ws_registered:
+            async_register_websocket_api(hass)
+            runtime.ws_registered = True
+
+        if runtime.llm_api_unsub is None:
+            runtime.llm_api_unsub = async_register_llm_api(hass)
+
+        hass.data[DOMAIN] = runtime
+        return runtime
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -340,37 +359,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up either the Household Hub or a Person Profile ConfigEntry."""
     runtime = await _ensure_runtime(hass)
 
-    if not runtime.frontend_registered:
-        await async_register_frontend(hass)
-        runtime.frontend_registered = True
-
-    if not runtime.services_registered:
-        async_register_services(hass)
-        runtime.services_registered = True
-
-    if not runtime.ws_registered:
-        async_register_websocket_api(hass)
-        runtime.ws_registered = True
-
-    if runtime.llm_api_unsub is None:
-        runtime.llm_api_unsub = async_register_llm_api(hass)
-
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     kind = entry.data.get(ENTRY_KIND, ENTRY_KIND_PERSON)
     if kind == ENTRY_KIND_HUB:
         cfg = merged_entry_config(entry)
         usda_key = str(cfg.get(CONF_USDA_API_KEY) or "").strip() or None
+        hub_language = str(cfg.get(CONF_LANGUAGE, DEFAULT_LANGUAGE))
         runtime.hub = HubRuntimeData(
             entry_id=entry.entry_id,
             llm_config=_extract_llm_config(cfg),
-            language=str(cfg.get(CONF_LANGUAGE, DEFAULT_LANGUAGE)),
+            language=hub_language,
             usda_api_key=usda_key,
             global_baseline_notes=str(cfg.get(CONF_GLOBAL_BASELINE_NOTES) or ""),
         )
         runtime.update_usda_api_key(usda_key)
-        # Refresh active person coordinators in case language/LLM changed
+        # Synchronize language & default slots for person entries that loaded before Hub
         for person_rt in runtime.persons.values():
+            p_entry = hass.config_entries.async_get_entry(person_rt.entry_id)
+            if p_entry is not None:
+                p_cfg = merged_entry_config(p_entry)
+                if str(p_cfg.get(CONF_LANGUAGE_OVERRIDE, "inherit")) == "inherit":
+                    updated_profile = _build_person_profile(p_entry, hub_language)
+                    if updated_profile.language != person_rt.profile.language:
+                        person_rt.profile = updated_profile
+                        person_rt.coordinator.profile = updated_profile
+                        await runtime.profile_repo.upsert_person(updated_profile)
             await person_rt.coordinator.async_request_refresh()
         log_event(_LOGGER, logging.INFO, "hub_entry_loaded", entry_id=entry.entry_id)
         return True
@@ -432,5 +446,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             runtime.stop_unsub = None
         await runtime.db.close()
         hass.data.pop(DOMAIN, None)
+        hass.data.pop(f"{DOMAIN}_init_lock", None)
 
     return unload_ok

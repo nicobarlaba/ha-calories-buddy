@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/HACS%20%2F%20Marketplace-Custom%20Integration-blue" alt="HACS / Marketplace" />
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License" />
   <img src="https://img.shields.io/badge/Languages-EN%20%7C%20IT-orange" alt="English and Italian" />
-  <img src="https://img.shields.io/badge/Tests-36%20Passing%20(90%25%20Core%20Cov)-brightgreen" alt="Tests Passing" />
+  <img src="https://img.shields.io/badge/Tests-38%20Passing%20(90%25%20Core%20Cov)-brightgreen" alt="Tests Passing" />
 </p>
 
 **HA Calories Buddy** is a privacy-first, multi-person, AI-assisted **personal dietitian, food diary, and nutrition hub** built natively as a Home Assistant Custom Integration with an auto-registered Lovelace Custom Card.
@@ -91,7 +91,7 @@ flowchart LR
 | Phase | Scope | Status |
 | :--- | :--- | :--- |
 | **Phase 1 — MVP** | Multi-person Hub + Person ConfigFlow, SQLite two-tier Food Vault, Open Food Facts + Barcode scanner, EU/US Atwater & raw/cooked yield math, Cloud + Local LLMs, Assist `llm.API`, BMR/TDEE + Garmin/scale mapping, Sensors + Colored Calendar, Custom Card v1 (`en`/`it`). | **Completed (`v0.1.0`)** |
-| **Phase 2 — Dietitian & Chef** | Two-tier taste/brand preference learning + Zero-Trust Hard-Constraint Gate, HA `ai_task.*` LLM provider, full Fiber tracking (10 sensors), on-demand recipe proposals, deterministic `±5%` macro-scaled 1–7d meal plans (`meal_prep_mode`), swap/promote, intra-day & multi-day rebalancing, Paginated Vault, Macro Pie Chart, 7 Assist tools, 14 services, Custom Card v2 (`Today`, `Plan`, `Food Vault`, `Preferences`). | **Completed (`v0.2.0`)** |
+| **Phase 2 — Dietitian & Chef** | Two-tier taste/brand preference learning + Zero-Trust Hard-Constraint Gate, HA `ai_task.*` LLM provider, full Fiber tracking (10 sensors), on-demand recipe proposals, deterministic `±5%` macro-scaled 1–7d meal plans (`meal_prep_mode`), swap/promote, intra-day & multi-day rebalancing, Paginated Vault, Macro Pie Chart, 7 Assist tools, 14 services, Custom Card v2 (`Today`, `Plan`, `Food Vault`, `Preferences`). | **Completed (`v0.2.1`)** |
 | **Phase 3 — Butler & Adaptive TDEE** | Editable weekly shopping draft synced to `todo.*`, MacroFactor-style Adaptive TDEE (EMA weight trend vs. intake), composite homemade recipes, Trends SVG charts. | Planned |
 
 ---
