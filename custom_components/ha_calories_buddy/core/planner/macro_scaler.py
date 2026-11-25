@@ -20,6 +20,10 @@ from custom_components.ha_calories_buddy.core.nutrition.yield_factors import (
     convert_to_reference_grams,
 )
 from custom_components.ha_calories_buddy.core.physiology.targets import TargetResult
+from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    slot_approx_minutes,
+)
+from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
 
 DEFAULT_SHARES_BY_COUNT: dict[int, tuple[float, ...]] = {
     1: (100.0,),
@@ -40,6 +44,7 @@ class ScalableIngredientInput:
     preparation_state: PreparationState
     role: IngredientRole
     brand: str | None = None
+    course: str | None = None
 
 
 def allocate_slot_targets(
@@ -75,6 +80,95 @@ def allocate_slot_targets(
     return result
 
 
+def compute_smart_slot_budget(
+    daily_targets: TargetResult,
+    slots: list[MealSlotConfig],
+    target_slot_name: str,
+    consumed_today: Macros,
+    eaten_slots: set[str],
+    *,
+    budget_mode: str = "auto",
+) -> tuple[Macros, str]:
+    """Compute remaining-aware target macros for an on-demand meal suggestion."""
+    slot_targets = allocate_slot_targets(daily_targets, slots)
+    fallback_slot = slot_targets.get(
+        target_slot_name,
+        Macros(
+            kcal=round(daily_targets.target_kcal * 0.35, 1),
+            protein_g=round(daily_targets.protein_g * 0.35, 1),
+            carbs_g=round(daily_targets.carbs_g * 0.35, 1),
+            fat_g=round(daily_targets.fat_g * 0.35, 1),
+            fiber_g=round(daily_targets.fiber_g * 0.35, 1),
+        ),
+    )
+
+    mode = (budget_mode or "auto").strip().lower()
+    if mode == "slot":
+        return fallback_slot, "slot_standard"
+
+    rem_k = daily_targets.target_kcal - consumed_today.kcal
+    rem_p = daily_targets.protein_g - consumed_today.protein_g
+    rem_c = daily_targets.carbs_g - consumed_today.carbs_g
+    rem_f = daily_targets.fat_g - consumed_today.fat_g
+    rem_fib = daily_targets.fiber_g - (consumed_today.fiber_g or 0.0)
+
+    def _floored(scale: float = 1.0) -> Macros:
+        return Macros(
+            kcal=round(max(180.0, rem_k * scale), 1),
+            protein_g=round(max(10.0, rem_p * scale), 1),
+            carbs_g=round(max(0.0, rem_c * scale), 1),
+            fat_g=round(max(3.0, rem_f * scale), 1),
+            fiber_g=round(max(0.0, rem_fib * scale), 1),
+        )
+
+    if mode == "remaining":
+        return _floored(1.0), "remaining_full"
+
+    # Auto mode: respect consumed meals & share across remaining un-eaten slots
+    if consumed_today.kcal <= 0.0 and not eaten_slots:
+        return fallback_slot, "slot_standard"
+
+    if rem_k < 180.0:
+        light_budget = Macros(
+            kcal=180.0,
+            protein_g=round(max(10.0, min(25.0, max(rem_p, 15.0))), 1),
+            carbs_g=round(max(0.0, min(20.0, rem_c)), 1),
+            fat_g=round(max(3.0, min(6.0, rem_f)), 1),
+            fiber_g=round(max(0.0, min(6.0, rem_fib)), 1),
+        )
+        return light_budget, "over_budget_light"
+
+    if not slots:
+        return _floored(1.0), "remaining_last_slot"
+
+    ordered = sorted(
+        enumerate(slots),
+        key=lambda pair: (slot_approx_minutes(pair[1]), pair[0]),
+    )
+    ordered_slots = [s for _, s in ordered]
+    target_norm = normalize_text(target_slot_name)
+    target_idx = next(
+        (i for i, s in enumerate(ordered_slots) if normalize_text(s.name) == target_norm),
+        len(ordered_slots) - 1,
+    )
+    eaten_norm = {normalize_text(s) for s in eaten_slots}
+    future_slots = [
+        s
+        for s in ordered_slots[target_idx:]
+        if normalize_text(s.name) == target_norm
+        or normalize_text(s.name) not in eaten_norm
+    ]
+
+    if len(future_slots) <= 1:
+        return _floored(1.0), "remaining_last_slot"
+
+    weights = [max(slot_targets.get(s.name, fallback_slot).kcal, 50.0) for s in future_slots]
+    total_weight = sum(weights) or 100.0
+    target_weight = max(fallback_slot.kcal, 50.0)
+    share = target_weight / total_weight
+    return _floored(share), "remaining_shared"
+
+
 def classify_ingredient_role(
     food: EffectiveFood | None,
     hint: IngredientRole | None = None,
@@ -105,10 +199,12 @@ def classify_ingredient_role(
 
 def _gram_bounds(
     item: ScalableIngredientInput,
+    target: Macros | None = None,
 ) -> tuple[float, float]:
     base = max(1.0, item.proposed_grams)
     role = item.role
     cat = item.food.category.lower() if item.food is not None else "other"
+    is_main_meal = target is not None and target.kcal >= 450.0
 
     if role == IngredientRole.CONDIMENT_FIXED:
         return max(1.0, base * 0.8), max(2.0, base * 1.2)
@@ -126,10 +222,17 @@ def _gram_bounds(
             "oats",
             "legumes",
         }:
-            return max(20.0, base * 0.45), min(180.0, max(base * 2.0, 140.0))
+            min_raw = (
+                max(45.0, base * 0.55)
+                if is_main_meal and cat in {"rice", "pasta", "grains", "oats"}
+                else max(20.0, base * 0.45)
+            )
+            return min_raw, min(180.0, max(base * 2.0, 140.0))
         return max(30.0, base * 0.45), min(400.0, max(base * 2.0, 280.0))
     # PROTEIN_ANCHOR
     if cat in {"poultry", "red_meat", "fish"}:
+        if is_main_meal and target is not None and target.protein_g >= 25.0:
+            return max(90.0, base * 0.55), min(360.0, max(base * 2.2, 280.0))
         return max(50.0, base * 0.5), min(320.0, max(base * 2.0, 260.0))
     return max(30.0, base * 0.5), min(350.0, max(base * 2.0, 280.0))
 
@@ -204,7 +307,7 @@ def scale_meal_ingredients(
         return [], Macros(kcal=0.0, protein_g=0.0, carbs_g=0.0, fat_g=0.0, fiber_g=0.0), True
 
     quantities = [max(1.0, it.proposed_grams) for it in ingredients]
-    bounds = [_gram_bounds(it) for it in ingredients]
+    bounds = [_gram_bounds(it, target=target) for it in ingredients]
     for idx, (lo, hi) in enumerate(bounds):
         quantities[idx] = max(lo, min(hi, quantities[idx]))
 
@@ -286,6 +389,7 @@ def scale_meal_ingredients(
                 grams=round(rounded_g, 1),
                 preparation_state=it.preparation_state,
                 role=it.role,
+                course=it.course,
                 macros=macros,
             )
         )

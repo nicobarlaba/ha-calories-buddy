@@ -29,7 +29,6 @@ from custom_components.ha_calories_buddy.const import (
 )
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
-    Macros,
     PersonProfile,
     PlanGenerationOptions,
     PreferenceScope,
@@ -38,7 +37,7 @@ from custom_components.ha_calories_buddy.core.models import (
 )
 from custom_components.ha_calories_buddy.core.physiology.targets import TargetResult
 from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
-    allocate_slot_targets,
+    compute_smart_slot_budget,
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     default_slots_for_language,
@@ -95,11 +94,11 @@ def _resolve_target_person(
         raise HomeAssistantError(str(exc)) from exc
 
 
-async def _refresh_person(hass: HomeAssistant, person_id: str) -> None:
+async def _refresh_person(
+    hass: HomeAssistant, person_id: str, reason: str = "service"
+) -> None:
     runtime: DomainRuntime = hass.data[DOMAIN]
-    person_rt = runtime.persons.get(person_id)
-    if person_rt is not None:
-        await person_rt.coordinator.async_request_refresh()
+    await runtime.async_notify_person_updated(person_id, reason)
 
 
 async def _require_targets(
@@ -123,10 +122,11 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def handle_log_meal_text(call: ServiceCall) -> dict[str, Any]:
         runtime: DomainRuntime = hass.data[DOMAIN]
         profile = _resolve_target_person(hass, call)
+        local_now = dt_util.now()
         log_d = (
             date.fromisoformat(call.data[ATTR_DATE])
             if ATTR_DATE in call.data
-            else None
+            else local_now.date()
         )
         try:
             result = await runtime.logging_service.log_from_text(
@@ -135,11 +135,12 @@ def async_register_services(hass: HomeAssistant) -> None:
                 log_date=log_d,
                 meal_slot=call.data.get(ATTR_MEAL_SLOT),
                 source_channel="service",
+                current_local_time=local_now.strftime("%H:%M"),
             )
         except Exception as exc:
             raise HomeAssistantError(str(exc)) from exc
 
-        await _refresh_person(hass, profile.person_id)
+        await _refresh_person(hass, profile.person_id, "service_log_meal_text")
         msg = (
             f"{result.summary_message}\n" + " ".join(result.warnings)
             if result.warnings
@@ -159,7 +160,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         log_d = (
             date.fromisoformat(call.data[ATTR_DATE])
             if ATTR_DATE in call.data
-            else None
+            else dt_util.now().date()
         )
         state = PreparationState(
             call.data.get(ATTR_STATE, PreparationState.UNSPECIFIED.value)
@@ -176,7 +177,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             log_date=log_d,
             source_channel="manual",
         )
-        await _refresh_person(hass, profile.person_id)
+        await _refresh_person(hass, profile.person_id, "service_log_meal_item")
         return {
             "summary": result.summary_message,
             "needs_confirmation": result.needs_confirmation,
@@ -258,7 +259,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         snap = await person_rt.coordinator.async_persist_today_snapshot(
             override_weight_kg=float(call.data[ATTR_WEIGHT_KG])
         )
-        await person_rt.coordinator.async_request_refresh()
+        await _refresh_person(hass, profile.person_id, "service_log_weight")
         return {"snapshot": snap.model_dump(mode="json")}
 
     async def handle_suggest_meal(call: ServiceCall) -> dict[str, Any]:
@@ -269,16 +270,16 @@ def async_register_services(hass: HomeAssistant) -> None:
         slot_name = resolve_meal_slot(
             call.data.get(ATTR_MEAL_SLOT), slots, language=profile.language
         )
-        slot_targets = allocate_slot_targets(targets, slots)
-        slot_macro = slot_targets.get(
+        today = dt_util.now().date()
+        totals = await runtime.meal_repo.get_daily_totals(profile.person_id, today)
+        budget_mode_arg = str(call.data.get("budget_mode") or "auto")
+        slot_macro, mode_used = compute_smart_slot_budget(
+            targets,
+            slots,
             slot_name,
-            Macros(
-                kcal=targets.target_kcal * 0.35,
-                protein_g=targets.protein_g * 0.35,
-                carbs_g=targets.carbs_g * 0.35,
-                fat_g=targets.fat_g * 0.35,
-                fiber_g=targets.fiber_g * 0.35,
-            ),
+            totals.consumed,
+            set(totals.by_slot.keys()),
+            budget_mode=budget_mode_arg,
         )
         try:
             suggestions = await runtime.planner_service.suggest_meal(
@@ -288,11 +289,16 @@ def async_register_services(hass: HomeAssistant) -> None:
                 user_hint=str(call.data.get("hint") or ""),
                 max_cook_minutes=call.data.get("max_cook_minutes"),
                 count=int(call.data.get("count", 3)),
+                reference_date=today,
+                budget_mode=mode_used,
             )
         except Exception as exc:
             raise HomeAssistantError(str(exc)) from exc
         return {
             "suggestions": [s.model_dump(mode="json") for s in suggestions],
+            "target_macros": slot_macro.model_dump(mode="json"),
+            "budget_mode_used": mode_used,
+            "meal_slot": slot_name,
         }
 
     async def handle_generate_meal_plan(call: ServiceCall) -> dict[str, Any]:
@@ -517,6 +523,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                 vol.Optional("hint"): cv.string,
                 vol.Optional("max_cook_minutes"): vol.Coerce(int),
                 vol.Optional("count", default=3): vol.Coerce(int),
+                vol.Optional("budget_mode", default="auto"): cv.string,
                 vol.Optional(ATTR_PERSON): cv.string,
             }
         ),

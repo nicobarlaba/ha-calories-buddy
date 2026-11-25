@@ -400,7 +400,7 @@ async def test_end_to_end_phase2_plan_calendar_rebalance_promote_and_preferences
     cal_events = cal_resp[cal_entity_id]["events"]
     assert any("📋" in ev["summary"] and "Salmone al forno" in ev["summary"] for ev in cal_events)
 
-    # 3. Suggest meal on demand via WS
+    # 3. Suggest meal on demand via WS -> includes smart target_macros & budget_mode_used
     await client.send_json(
         {
             "id": 8,
@@ -408,12 +408,15 @@ async def test_end_to_end_phase2_plan_calendar_rebalance_promote_and_preferences
             "meal_slot": "Cena",
             "hint": "leggero e veloce",
             "count": 1,
+            "budget_mode": "auto",
         }
     )
     m8 = await client.receive_json()
     assert m8["success"] is True
     assert len(m8["result"]["suggestions"]) == 1
     assert m8["result"]["suggestions"][0]["macros"]["kcal"] > 0
+    assert m8["result"]["target_macros"]["kcal"] > 0
+    assert m8["result"]["budget_mode_used"] in {"slot_standard", "remaining_last_slot", "remaining_shared", "remaining_full", "over_budget_light"}
 
     # 4. Swap planned Cena via WS
     await client.send_json(
@@ -486,6 +489,22 @@ async def test_end_to_end_phase2_plan_calendar_rebalance_promote_and_preferences
     )
     events_today = cal_after[cal_entity_id]["events"]
     assert any("🍽️" in ev["summary"] and "Pranzo" in ev["summary"] for ev in events_today)
+
+    # 7. Log suggested meal in 1 grouped tap via WS (id=13)
+    await client.send_json(
+        {
+            "id": 13,
+            "type": f"{DOMAIN}/log_suggestion",
+            "suggestion": m8["result"]["suggestions"][0],
+            "scale": 1.0,
+        }
+    )
+    m13 = await client.receive_json()
+    assert m13["success"] is True
+    assert m13["result"]["meal_log"]["source_channel"] == "suggestion_accept"
+    assert len(m13["result"]["meal_log"]["items"]) == len(
+        m8["result"]["suggestions"][0]["ingredients"]
+    )
     assert pref_id
 
 

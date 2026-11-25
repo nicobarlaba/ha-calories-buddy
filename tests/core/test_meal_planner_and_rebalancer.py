@@ -11,6 +11,9 @@ import pytest
 from pydantic import BaseModel
 
 from custom_components.ha_calories_buddy.core.llm.base import LLMClient
+from custom_components.ha_calories_buddy.core.llm.prompts.food_estimate import (
+    EstimatedFoodSchema,
+)
 from custom_components.ha_calories_buddy.core.llm.prompts.meal_plan import (
     DayPlanProposalSchema,
     MealSuggestionListSchema,
@@ -25,6 +28,7 @@ from custom_components.ha_calories_buddy.core.models import (
     LLMConfig,
     Macros,
     MealLog,
+    MealLogItem,
     MealStatus,
     PersonProfile,
     PlanGenerationOptions,
@@ -76,6 +80,7 @@ class ScriptedLLMClient(LLMClient):
         )
         self._responses = list(responses)
         self.prompts_seen: list[str] = []
+        self.system_prompts_seen: list[str] = []
 
     async def _raw_structured_completion(
         self,
@@ -83,6 +88,7 @@ class ScriptedLLMClient(LLMClient):
         user_prompt: str,
         response_model: type[BaseModel],
     ) -> str:
+        self.system_prompts_seen.append(system_prompt)
         self.prompts_seen.append(user_prompt)
         if not self._responses:
             raise AssertionError("ScriptedLLMClient ran out of scripted responses")
@@ -490,5 +496,158 @@ async def test_rebalancer_intraday_and_multiday_floors(ctx: dict[str, Any]) -> N
             assert pday is not None
             assert pday.target_macros.kcal >= 1500.0
             assert pday.target_macros.fat_g >= (0.65 * 74.0) - 0.2
+    finally:
+        await client._session.close()
+
+
+async def test_v023_tier4_fallback_diversity_anti_repetition_and_grouped_log(
+    ctx: dict[str, Any],
+) -> None:
+    """Verify Tier 4 candidate fallback, same-day anti-repetition retry, course labels, and grouped log."""
+    profile: PersonProfile = ctx["profile"]
+    today = date.today()
+
+    # Lunch already eaten today with Pasta and Lentils (should be avoided at Cena!)
+    await ctx["meal_repo"].create_meal_log(
+        MealLog(
+            log_id="lunch_pasta_lentils",
+            person_id=profile.person_id,
+            log_date=today,
+            meal_slot="Pranzo",
+            status=MealStatus.CONFIRMED,
+            total_macros=Macros(kcal=580, protein_g=24, carbs_g=92, fat_g=10, fiber_g=9),
+            items=[
+                MealLogItem(
+                    item_id="li_pasta",
+                    log_id="lunch_pasta_lentils",
+                    food_id="seed_pasta_semolina_raw",
+                    display_name="Pasta di Semola (Cruda)",
+                    input_quantity=80,
+                    input_unit="g",
+                    input_state=PreparationState.RAW,
+                    resolved_grams_ref=80,
+                    macros=Macros(kcal=285.6, protein_g=10, carbs_g=57.6, fat_g=1.2, fiber_g=2.4),
+                ),
+                MealLogItem(
+                    item_id="li_lentils",
+                    log_id="lunch_pasta_lentils",
+                    food_id="seed_lentils_cooked",
+                    display_name="Lenticchie (Cotte / Lessate)",
+                    input_quantity=250,
+                    input_unit="g",
+                    input_state=PreparationState.COOKED,
+                    resolved_grams_ref=250,
+                    macros=Macros(kcal=290, protein_g=22.5, carbs_g=40, fat_g=1, fiber_g=19.8),
+                ),
+            ],
+        )
+    )
+
+    # Attempt 1 repeats lunch lentils + pasta twice -> quality retry triggers once!
+    repetitive_payload = MealSuggestionListSchema(
+        suggestions=[
+            PlannedMealSkeleton(
+                meal_slot="Cena",
+                title="Pasta con lenticchie",
+                prep_minutes=20,
+                ingredients=[
+                    PlannedIngredientSpec(name="Pasta di Semola (Cruda)", grams=80, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR, course="Primo"),
+                    PlannedIngredientSpec(name="Lenticchie (Cotte / Lessate)", grams=180, preparation_state=PreparationState.COOKED, role=IngredientRole.PROTEIN_ANCHOR, course="Secondo"),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Cena",
+                title="Pasta al pomodoro",
+                prep_minutes=15,
+                ingredients=[
+                    PlannedIngredientSpec(name="Pasta di Semola (Cruda)", grams=90, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR, course="Primo"),
+                    PlannedIngredientSpec(name="Passata di pomodoro", grams=150, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PRODUCE_FIXED, course="Contorno"),
+                ],
+            ),
+        ]
+    ).model_dump_json()
+
+    # Attempt 2 includes 1 exotic unseeded item ('Tempeh') to exercise Tier 4 LLM fallback
+    diversified_payload = MealSuggestionListSchema(
+        suggestions=[
+            PlannedMealSkeleton(
+                meal_slot="Cena",
+                title="Orata al forno con patate e rucola",
+                prep_minutes=25,
+                steps=["Cuoci l'orata con le patate", "Servi con rucola fresca"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Orata / Branzino (Crudo)", grams=220, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR, course="Secondo"),
+                    PlannedIngredientSpec(name="Patate (Crude)", grams=260, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR, course="Pane / Carbo"),
+                    PlannedIngredientSpec(name="Rucola", grams=60, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PRODUCE_FIXED, course="Contorno"),
+                    PlannedIngredientSpec(name="Olio Extravergine di Oliva", grams=15, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR, course="Contorno"),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Cena",
+                title="Tempeh con riso basmati e melanzane",
+                prep_minutes=20,
+                steps=["Griglia il tempeh", "Cuoci il riso basmati"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Tempeh", grams=180, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR, course="Secondo"),
+                    PlannedIngredientSpec(name="Riso Basmati (Crudo)", grams=85, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR, course="Pane / Carbo"),
+                    PlannedIngredientSpec(name="Melanzane (Crude)", grams=180, preparation_state=PreparationState.RAW, role=IngredientRole.PRODUCE_FIXED, course="Contorno"),
+                ],
+            ),
+        ]
+    ).model_dump_json()
+
+    tier4_estimate_payload = EstimatedFoodSchema(
+        name="Tempeh",
+        category="other",
+        preparation_state=PreparationState.READY_TO_EAT,
+        kcal_per_100g=195.0,
+        protein_g_per_100g=19.0,
+        carbs_g_per_100g=9.0,
+        fat_g_per_100g=10.0,
+        fiber_g_per_100g=5.0,
+        yield_factor=1.0,
+    ).model_dump_json()
+
+    client = ScriptedLLMClient([repetitive_payload, diversified_payload, tier4_estimate_payload])
+    try:
+        planner = MealPlannerService(
+            plan_repo=ctx["plan_repo"],
+            meal_repo=ctx["meal_repo"],
+            preference_engine=ctx["pref_engine"],
+            resolver=ctx["resolver"],
+            llm_client_getter=lambda _p: client,
+        )
+        dinner_budget = Macros(kcal=1100.0, protein_g=65.0, carbs_g=120.0, fat_g=34.0, fiber_g=14.0)
+        suggestions = await planner.suggest_meal(
+            profile,
+            meal_slot="Cena",
+            target_macros=dinner_budget,
+            count=2,
+            reference_date=today,
+            budget_mode="remaining_last_slot",
+        )
+        assert len(suggestions) == 2
+        assert "ALREADY EATEN TODAY" in client.system_prompts_seen[0]
+        assert "MULTI-COURSE STRUCTURE" in client.system_prompts_seen[0]
+        assert "Verified Food Vault ingredients" in client.system_prompts_seen[0]
+        assert "QUALITY IMPROVEMENT NEEDED" in client.prompts_seen[1]
+
+        # Tier 4 estimated food produces real > 0 kcal instead of 0 kcal!
+        tempeh_opt = next(s for s in suggestions if "Tempeh" in s.title)
+        tempeh_ing = next(i for i in tempeh_opt.ingredients if "Tempeh" in i.name)
+        assert tempeh_ing.macros.kcal > 0.0
+        assert tempeh_ing.course == "Secondo"
+        assert suggestions[0].target_macros is not None
+        assert suggestions[0].target_macros.kcal == 1100.0
+        assert suggestions[0].budget_mode == "remaining_last_slot"
+
+        # 1-tap grouped logging persists 1 single MealLog containing all suggestion items
+        orata_opt = next(s for s in suggestions if "Orata" in s.title)
+        logged = await planner.log_suggestion_as_meal(profile, orata_opt, log_date=today)
+        assert logged.status == MealStatus.CONFIRMED
+        assert logged.source_channel == "suggestion_accept"
+        assert logged.raw_input_text == orata_opt.title
+        assert len(logged.items) == len(orata_opt.ingredients)
+        assert logged.total_macros.kcal == pytest.approx(orata_opt.macros.kcal, abs=2.0)
     finally:
         await client._session.close()

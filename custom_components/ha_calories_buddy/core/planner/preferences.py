@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from pydantic import BaseModel, Field
 
@@ -301,6 +302,8 @@ class PreferenceContext(BaseModel):
     preferred_brands: list[str] = Field(default_factory=list)
     top_frequent_foods: list[str] = Field(default_factory=list)
     recent_meals_last_7d: list[str] = Field(default_factory=list)
+    eaten_today_foods: list[str] = Field(default_factory=list)
+    eaten_today_categories: list[str] = Field(default_factory=list)
     liked_titles: list[str] = Field(default_factory=list)
     disliked_titles: list[str] = Field(default_factory=list)
     never_suggest_titles: list[str] = Field(default_factory=list)
@@ -317,8 +320,13 @@ class PreferenceEngine:
         self._pref_repo = pref_repo
         self._meal_repo = meal_repo
 
-    async def build_context(self, profile: PersonProfile) -> PreferenceContext:
+    async def build_context(
+        self,
+        profile: PersonProfile,
+        reference_date: date | None = None,
+    ) -> PreferenceContext:
         """Merge global household rules with person overrides and consumption history."""
+        ref_date = reference_date or date.today()
         raw_entries = await self._pref_repo.list_preferences(
             profile.person_id, include_global=True
         )
@@ -371,7 +379,7 @@ class PreferenceEngine:
         )
 
         frequent_rows = await self._meal_repo.get_top_frequent_foods(
-            profile.person_id, limit=20
+            profile.person_id, limit=20, min_distinct_days=3
         )
         top_foods: list[str] = []
         for row in frequent_rows:
@@ -381,7 +389,10 @@ class PreferenceEngine:
                 top_foods.append(f"{name} ({brand})" if brand else name)
 
         recent_meals = await self._meal_repo.get_recent_meal_titles(
-            profile.person_id, days=7
+            profile.person_id, days=7, reference_date=ref_date
+        )
+        eaten_today_foods, eaten_today_categories = (
+            await self._meal_repo.get_eaten_today_foods(profile.person_id, ref_date)
         )
         feedbacks = await self._pref_repo.list_feedback(profile.person_id)
 
@@ -408,6 +419,8 @@ class PreferenceEngine:
             preferred_brands=preferred_brands,
             top_frequent_foods=top_foods,
             recent_meals_last_7d=recent_meals,
+            eaten_today_foods=eaten_today_foods,
+            eaten_today_categories=eaten_today_categories,
             liked_titles=liked_titles,
             disliked_titles=disliked_titles,
             never_suggest_titles=never_suggest,

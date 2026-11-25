@@ -220,6 +220,15 @@ suggest_meal:
           min: 1
           max: 3
           step: 1
+    budget_mode:
+      name: Budget Mode (optional)
+      default: auto
+      selector:
+        select:
+          options:
+            - auto
+            - remaining
+            - slot
     person:
       name: Person (optional)
       selector:

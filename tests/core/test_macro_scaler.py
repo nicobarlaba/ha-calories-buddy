@@ -19,6 +19,7 @@ from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
     ScalableIngredientInput,
     allocate_slot_targets,
     classify_ingredient_role,
+    compute_smart_slot_budget,
     scale_day_meals,
     scale_meal_ingredients,
 )
@@ -187,3 +188,88 @@ def test_scale_meal_and_day_converge_within_five_percent() -> None:
     assert impossible_warn is True
     assert scale_meal_ingredients([], lunch_target)[2] is True
     assert scale_day_meals([], day_target_macros)[2] is True
+
+
+def test_compute_smart_slot_budget_and_main_meal_bounds() -> None:
+    """Verify remaining-aware budgets, raw carb lower-bound guard, and course propagation."""
+    daily = TargetResult(
+        target_kcal=2200.0,
+        protein_g=160.0,
+        carbs_g=240.0,
+        fat_g=67.0,
+        fiber_g=31.0,
+        mode=TargetMode.PHYSIOLOGY,
+    )
+    slots = default_slots_for_language("it")
+    zero = Macros(kcal=0.0, protein_g=0.0, carbs_g=0.0, fat_g=0.0, fiber_g=0.0)
+
+    # 1. Auto on empty day falls back to standard slot target
+    b_empty, mode_empty = compute_smart_slot_budget(
+        daily, slots, "Cena", zero, set(), budget_mode="auto"
+    )
+    assert mode_empty == "slot_standard"
+    assert b_empty.kcal == pytest.approx(660.0, abs=1.0)
+
+    # 2. Auto on last remaining slot (Cena after Colazione/Pranzo/Spuntino eaten) uses 100% remaining
+    eaten_day = Macros(kcal=1002.0, protein_g=52.0, carbs_g=120.0, fat_g=19.0, fiber_g=15.0)
+    b_cena, mode_cena = compute_smart_slot_budget(
+        daily,
+        slots,
+        "Cena",
+        eaten_day,
+        {"Colazione", "Pranzo", "Spuntino"},
+        budget_mode="auto",
+    )
+    assert mode_cena == "remaining_last_slot"
+    assert b_cena.kcal == pytest.approx(1198.0, abs=1.0)
+    assert b_cena.protein_g == pytest.approx(108.0, abs=1.0)
+
+    # 3. Auto at Pranzo shares remaining across Pranzo + Spuntino + Cena proportionally
+    consumed_bk = Macros(kcal=440.0, protein_g=25.0, carbs_g=55.0, fat_g=12.0, fiber_g=6.0)
+    b_pranzo, mode_pranzo = compute_smart_slot_budget(
+        daily, slots, "Pranzo", consumed_bk, {"Colazione"}, budget_mode="auto"
+    )
+    assert mode_pranzo == "remaining_shared"
+    assert 600.0 <= b_pranzo.kcal <= 1050.0
+
+    # 4. Over-budget day falls back to bounded light budget
+    over = Macros(kcal=2300.0, protein_g=170.0, carbs_g=250.0, fat_g=75.0, fiber_g=32.0)
+    b_over, mode_over = compute_smart_slot_budget(
+        daily, slots, "Cena", over, {"Colazione", "Pranzo"}, budget_mode="auto"
+    )
+    assert mode_over == "over_budget_light"
+    assert b_over.kcal == 180.0
+
+    # 5. Explicit 'remaining' and 'slot' modes
+    b_rem_full, mode_rem = compute_smart_slot_budget(
+        daily, slots, "Pranzo", consumed_bk, {"Colazione"}, budget_mode="remaining"
+    )
+    assert mode_rem == "remaining_full"
+    assert b_rem_full.kcal == pytest.approx(1760.0, abs=1.0)
+
+    b_slot, mode_slot = compute_smart_slot_budget(
+        daily, slots, "Cena", eaten_day, {"Pranzo"}, budget_mode="slot"
+    )
+    assert mode_slot == "slot_standard"
+    assert b_slot.kcal == pytest.approx(660.0, abs=1.0)
+
+    # 6. Main-meal raw pasta guard: cannot collapse below 45g even if target favors lower carbs,
+    #    and course labels are preserved verbatim on PlannedIngredient
+    pasta = _food("f_pasta", "Pasta di Semola", "pasta", kcal=357, p=12.5, c=72.0, f=1.5, yf=2.2)
+    chicken = _food("f_chicken", "Petto di pollo", "poultry", kcal=110, p=23.1, c=0.0, f=1.9)
+    oil = _food("f_oil", "Olio EVO", "oil", state=PreparationState.READY_TO_EAT, kcal=884, p=0, c=0, f=98.2)
+    low_carb_dinner = Macros(kcal=520.0, protein_g=60.0, carbs_g=20.0, fat_g=20.0, fiber_g=4.0)
+    scaled_ings, _, _ = scale_meal_ingredients(
+        [
+            ScalableIngredientInput("Pasta di Semola", pasta, 70.0, PreparationState.RAW, IngredientRole.CARB_ANCHOR, course="Primo"),
+            ScalableIngredientInput("Petto di pollo", chicken, 150.0, PreparationState.RAW, IngredientRole.PROTEIN_ANCHOR, course="Secondo"),
+            ScalableIngredientInput("Olio EVO", oil, 10.0, PreparationState.READY_TO_EAT, IngredientRole.FAT_ANCHOR, course="Contorno"),
+        ],
+        low_carb_dinner,
+    )
+    pasta_out = next(i for i in scaled_ings if i.name == "Pasta di Semola")
+    chicken_out = next(i for i in scaled_ings if i.name == "Petto di pollo")
+    assert pasta_out.grams >= 45.0
+    assert chicken_out.grams >= 90.0
+    assert pasta_out.course == "Primo"
+    assert chicken_out.course == "Secondo"

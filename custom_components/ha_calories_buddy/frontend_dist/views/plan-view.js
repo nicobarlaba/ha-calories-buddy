@@ -2,6 +2,40 @@
 import { t } from "../i18n/index.js";
 import { escapeHtml, parseJsonSafe, pickDefaultSlotForNow, round1 } from "../utils.js";
 
+function groupIngredientsByCourse(ingredients) {
+  const hasCourse = (ingredients || []).some((ing) => Boolean(ing.course));
+  if (!hasCourse) return null;
+  const groups = [];
+  const byCourse = new Map();
+  for (const ing of ingredients || []) {
+    const label = (ing.course || "").trim() || "Altro";
+    if (!byCourse.has(label)) {
+      const bucket = [];
+      byCourse.set(label, bucket);
+      groups.push([label, bucket]);
+    }
+    byCourse.get(label).push(ing);
+  }
+  return groups;
+}
+
+function renderCompactIngredientsHtml(ingredients) {
+  const groups = groupIngredientsByCourse(ingredients);
+  if (!groups) {
+    return (ingredients || [])
+      .map((i) => `${escapeHtml(i.name)} ${round1(i.grams)}g`)
+      .join(" · ");
+  }
+  return groups
+    .map(
+      ([course, ings]) =>
+        `<div class="course-line"><span class="course-tag">${escapeHtml(course)}</span> ${ings
+          .map((i) => `${escapeHtml(i.name)} ${round1(i.grams)}g`)
+          .join(" · ")}</div>`
+    )
+    .join("");
+}
+
 function renderRecipeModal(host, lang, item) {
   if (!item) {
     host.innerHTML = "";
@@ -33,7 +67,7 @@ function renderRecipeModal(host, lang, item) {
             .map(
               (ing) => `
             <div class="meal-item-row">
-              <span><strong>${escapeHtml(ing.name)}</strong>${ing.brand ? ` <span class="pill">${escapeHtml(ing.brand)}</span>` : ""}</span>
+              <span>${ing.course ? `<span class="course-tag">${escapeHtml(ing.course)}</span> ` : ""}<strong>${escapeHtml(ing.name)}</strong>${ing.brand ? ` <span class="pill">${escapeHtml(ing.brand)}</span>` : ""}</span>
               <span><strong>${round1(ing.grams)} g</strong> (${escapeHtml(t(lang, `state_${ing.preparation_state}`) || ing.preparation_state)})</span>
             </div>
           `
@@ -67,6 +101,11 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
   const selectedDate = planState.selectedDate || (days[0]?.plan_date || dashboard?.date);
   const activeDay = days.find((d) => d.plan_date === selectedDate) || days[0] || null;
   const suggestions = planState.suggestions || [];
+  const suggestMeta = planState.suggestMeta || null;
+  const budgetModeVal = planState.suggestBudgetMode || "auto";
+  const sugTarget = suggestMeta?.target_macros || suggestions[0]?.target_macros || null;
+  const sugModeUsed = suggestMeta?.budget_mode_used || suggestions[0]?.budget_mode || "auto";
+  const sugSlotLabel = suggestMeta?.meal_slot || suggestions[0]?.meal_slot || "";
 
   container.innerHTML = `
     <div class="controls-row" style="margin-bottom: 10px;">
@@ -129,7 +168,15 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
           </div>
           <div class="form-field">
             <label>${escapeHtml(t(lang, "max_time_label"))}</label>
-            <input type="number" min="5" max="120" step="5" id="sug-max-min" value="20" />
+            <input type="number" min="5" max="120" step="5" id="sug-max-min" value="25" />
+          </div>
+          <div class="form-field full">
+            <label>${escapeHtml(t(lang, "budget_mode_label"))}</label>
+            <select id="sug-budget-mode">
+              <option value="auto" ${budgetModeVal === "auto" ? "selected" : ""}>${escapeHtml(t(lang, "budget_mode_auto"))}</option>
+              <option value="remaining" ${budgetModeVal === "remaining" ? "selected" : ""}>${escapeHtml(t(lang, "budget_mode_remaining"))}</option>
+              <option value="slot" ${budgetModeVal === "slot" ? "selected" : ""}>${escapeHtml(t(lang, "budget_mode_slot"))}</option>
+            </select>
           </div>
           <div class="form-field full">
             <input type="text" id="sug-hint" placeholder="${escapeHtml(t(lang, "suggest_hint_placeholder"))}" />
@@ -146,20 +193,37 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
 
     ${
       suggestions.length
-        ? `<div class="section-title">🍳 ${escapeHtml(t(lang, "suggest_meal_btn"))}</div>
+        ? `<div class="section-title">🍳 ${escapeHtml(
+            t(lang, "suggest_options_banner", {
+              count: suggestions.length,
+              slot: sugSlotLabel || t(lang, "meal_slot_label"),
+            })
+          )}</div>
+           ${
+             sugTarget
+               ? `<div class="suggest-banner">
+                    <span>🎯 ${escapeHtml(t(lang, "target"))}: <strong>${Math.round(sugTarget.kcal)} kcal</strong> (P ${round1(sugTarget.protein_g)}g · C ${round1(sugTarget.carbs_g)}g · F ${round1(sugTarget.fat_g)}g)</span>
+                    <span class="pill">${escapeHtml(t(lang, `budget_used_${sugModeUsed}`) || sugModeUsed)}</span>
+                  </div>`
+               : ""
+           }
            ${suggestions
              .map(
                (sug, idx) => `
              <div class="meal-card planned">
                <div class="meal-header">
-                 <span>${escapeHtml(sug.title)} <span class="pill">⏱️ ${sug.prep_minutes}m</span></span>
+                 <span>
+                   ${escapeHtml(sug.title)}
+                   <span class="pill">⏱️ ${sug.prep_minutes}m</span>
+                   ${sug.macro_fit_warning ? `<span class="pill warn">⚠️ ${escapeHtml(t(lang, "fit_warning_badge"))}</span>` : ""}
+                 </span>
                  <span>${Math.round(sug.macros.kcal)} kcal</span>
                </div>
                <div class="meal-item-meta">
                  P ${round1(sug.macros.protein_g)}g · C ${round1(sug.macros.carbs_g)}g · F ${round1(sug.macros.fat_g)}g · Fib ${round1(sug.macros.fiber_g || 0)}g
                </div>
                <div class="meal-item-meta" style="margin-top:4px;">
-                 ${(sug.ingredients || []).map((i) => `${escapeHtml(i.name)} ${round1(i.grams)}g`).join(" · ")}
+                 ${renderCompactIngredientsHtml(sug.ingredients || [])}
                </div>
                <div class="meal-actions">
                  <button type="button" class="secondary view-sug-recipe-btn" data-idx="${idx}">${escapeHtml(t(lang, "recipe_btn"))}</button>
@@ -212,7 +276,7 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
                   ⏱️ ${item.prep_minutes}m · P ${round1(item.macros.protein_g)}g C ${round1(item.macros.carbs_g)}g F ${round1(item.macros.fat_g)}g Fib ${round1(item.macros.fiber_g || 0)}g
                 </div>
                 <div class="meal-item-meta" style="margin-top:4px;">
-                  ${ings.map((i) => `${escapeHtml(i.name)} ${round1(i.grams)}g`).join(" · ")}
+                  ${renderCompactIngredientsHtml(ings)}
                 </div>
                 ${
                   isSwapping
@@ -262,9 +326,15 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
 
   container.querySelector("#submit-suggest-btn")?.addEventListener("click", () => {
     const slot = container.querySelector("#sug-slot")?.value || "";
-    const maxMin = Number(container.querySelector("#sug-max-min")?.value || 20);
+    const maxMin = Number(container.querySelector("#sug-max-min")?.value || 25);
+    const budgetMode = container.querySelector("#sug-budget-mode")?.value || "auto";
     const hint = (container.querySelector("#sug-hint")?.value || "").trim();
-    callbacks.onSuggestMeal({ meal_slot: slot, max_cook_minutes: maxMin, hint });
+    callbacks.onSuggestMeal({
+      meal_slot: slot,
+      max_cook_minutes: maxMin,
+      budget_mode: budgetMode,
+      hint,
+    });
   });
 
   container.querySelectorAll(".day-pill").forEach((btn) => {

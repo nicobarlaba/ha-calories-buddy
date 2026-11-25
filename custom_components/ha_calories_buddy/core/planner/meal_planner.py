@@ -21,6 +21,7 @@ from custom_components.ha_calories_buddy.core.llm.prompts.meal_plan import (
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
     EffectiveFood,
+    IngredientRole,
     Macros,
     MealLog,
     MealLogItem,
@@ -47,6 +48,9 @@ from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
     scale_day_meals,
     scale_meal_ingredients,
 )
+from custom_components.ha_calories_buddy.core.planner.meal_parser import (
+    LLMFoodEstimatorAdapter,
+)
 from custom_components.ha_calories_buddy.core.planner.preferences import (
     PreferenceContext,
     PreferenceEngine,
@@ -59,6 +63,7 @@ from custom_components.ha_calories_buddy.core.storage.meal_repo import MealRepos
 from custom_components.ha_calories_buddy.core.storage.plan_repo import (
     MealPlanRepository,
 )
+from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
 
 _LOGGER = get_logger(__name__)
 MAX_SAFETY_RETRIES = 2
@@ -102,6 +107,8 @@ class MealPlannerService:
         user_hint: str = "",
         max_cook_minutes: int | None = None,
         count: int = 3,
+        reference_date: date | None = None,
+        budget_mode: str = "auto",
     ) -> list[MealSuggestion]:
         """Generate 1-3 constraint-verified, macro-scaled meal suggestions on demand."""
         llm_client = self._require_llm(profile)
@@ -116,7 +123,9 @@ class MealPlannerService:
             else slot_cfg.max_cook_minutes
         )
 
-        ctx = await self._pref_engine.build_context(profile)
+        ctx = await self._pref_engine.build_context(profile, reference_date=reference_date)
+        vault_hint = await self._build_vault_catalog_hint(profile)
+        requested_count = max(1, min(3, count))
         sys_prompt, user_prompt = build_suggest_meal_prompts(
             profile=profile,
             ctx=ctx,
@@ -124,9 +133,11 @@ class MealPlannerService:
             target_macros=target_macros,
             max_cook_minutes=cook_limit,
             user_hint=user_hint,
-            count=max(1, min(3, count)),
+            count=requested_count,
+            vault_catalog_hint=vault_hint,
         )
 
+        resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] = {}
         safe_skeletons: list[tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]] = []
         last_violations: list[str] = []
         current_prompt = user_prompt
@@ -141,6 +152,8 @@ class MealPlannerService:
                 profile=profile,
                 skeletons=resp.suggestions,
                 ctx=ctx,
+                llm_client=llm_client,
+                resolve_cache=resolve_cache,
             )
             safe_skeletons.extend(passed)
             if safe_skeletons and not violations:
@@ -157,8 +170,51 @@ class MealPlannerService:
         if not safe_skeletons:
             raise HardConstraintViolationError(last_violations or ["no_safe_suggestion"])
 
+        # Non-blocking single retry for culinary diversity, anti-repetition, or unresolved ingredients
+        quality_issues = self._detect_suggestion_quality_issues(
+            safe_skeletons[:requested_count],
+            ctx=ctx,
+            requested_count=requested_count,
+            user_hint=user_hint,
+        )
+        if quality_issues:
+            try:
+                retry_prompt = (
+                    f"{user_prompt}\n\n"
+                    "QUALITY IMPROVEMENT NEEDED — Please regenerate distinct balanced options fixing:\n"
+                    + "\n".join(f"- {issue}" for issue in quality_issues)
+                )
+                retry_resp = await llm_client.generate_structured(
+                    system_prompt=sys_prompt,
+                    user_prompt=retry_prompt,
+                    response_model=MealSuggestionListSchema,
+                )
+                retry_passed, retry_violations = await self._validate_and_resolve_skeletons(
+                    profile=profile,
+                    skeletons=retry_resp.suggestions,
+                    ctx=ctx,
+                    llm_client=llm_client,
+                    resolve_cache=resolve_cache,
+                )
+                if retry_passed and not retry_violations:
+                    retry_issues = self._detect_suggestion_quality_issues(
+                        retry_passed[:requested_count],
+                        ctx=ctx,
+                        requested_count=requested_count,
+                        user_hint=user_hint,
+                    )
+                    if len(retry_issues) <= len(quality_issues):
+                        safe_skeletons = retry_passed
+            except Exception as exc:  # noqa: BLE001
+                log_event(
+                    _LOGGER,
+                    logging.INFO,
+                    "suggest_meal_quality_retry_skipped",
+                    error_type=type(exc).__name__,
+                )
+
         suggestions: list[MealSuggestion] = []
-        for skel, resolved_ings in safe_skeletons[:count]:
+        for skel, resolved_ings in safe_skeletons[:requested_count]:
             scaled_ings, macros, macro_warn = scale_meal_ingredients(
                 resolved_ings, target_macros
             )
@@ -171,6 +227,8 @@ class MealPlannerService:
                     tips=skel.tips,
                     ingredients=scaled_ings,
                     macros=macros,
+                    target_macros=target_macros,
+                    budget_mode=budget_mode,
                     macro_fit_warning=macro_warn,
                 )
             )
@@ -188,7 +246,9 @@ class MealPlannerService:
         llm_client = self._require_llm(profile)
         slots = profile.meal_slots or default_slots_for_language(profile.language)
         slot_targets = allocate_slot_targets(daily_targets, slots)
-        ctx = await self._pref_engine.build_context(profile)
+        ctx = await self._pref_engine.build_context(profile, reference_date=start_date)
+        vault_hint = await self._build_vault_catalog_hint(profile)
+        resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] = {}
 
         day_target_macros = Macros(
             kcal=daily_targets.target_kcal,
@@ -251,6 +311,7 @@ class MealPlannerService:
                 slot_targets=slot_targets,
                 options=options,
                 previous_titles=generated_titles,
+                vault_catalog_hint=vault_hint,
             )
 
             day_resolved = await self._generate_safe_day(
@@ -260,6 +321,7 @@ class MealPlannerService:
                 slots=slots,
                 system_prompt=sys_prompt,
                 user_prompt=user_prompt,
+                resolve_cache=resolve_cache,
             )
 
             slot_inputs = [
@@ -366,7 +428,11 @@ class MealPlannerService:
                 ),
             )
 
-        ctx = await self._pref_engine.build_context(profile)
+        ctx = await self._pref_engine.build_context(
+            profile, reference_date=plan_day.plan_date
+        )
+        vault_hint = await self._build_vault_catalog_hint(profile)
+        resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] = {}
         sys_prompt, user_prompt = build_swap_meal_prompts(
             profile=profile,
             ctx=ctx,
@@ -375,6 +441,7 @@ class MealPlannerService:
             max_cook_minutes=slot_cfg.max_cook_minutes,
             current_title=current_item.title,
             user_instruction=user_instruction,
+            vault_catalog_hint=vault_hint,
         )
 
         new_skel, resolved_ings = await self._generate_safe_single_swap(
@@ -384,6 +451,7 @@ class MealPlannerService:
             slot_name=current_item.meal_slot,
             system_prompt=sys_prompt,
             user_prompt=user_prompt,
+            resolve_cache=resolve_cache,
         )
         scaled_ings, meal_macros, meal_warn = scale_meal_ingredients(
             resolved_ings, slot_budget
@@ -484,6 +552,77 @@ class MealPlannerService:
         )
         return meal_log
 
+    async def log_suggestion_as_meal(
+        self,
+        profile: PersonProfile,
+        suggestion: MealSuggestion,
+        *,
+        log_date: date | None = None,
+        actual_scale: float = 1.0,
+    ) -> MealLog:
+        """Persist an accepted MealSuggestion as one single grouped confirmed MealLog."""
+        scale = max(0.1, min(5.0, float(actual_scale)))
+        log_id = f"log_{uuid.uuid4().hex[:12]}"
+        log_items: list[MealLogItem] = []
+
+        for ing in suggestion.ingredients:
+            scaled_grams = round(ing.grams * scale, 1)
+            scaled_macros = Macros(
+                kcal=round(ing.macros.kcal * scale, 1),
+                protein_g=round(ing.macros.protein_g * scale, 1),
+                carbs_g=round(ing.macros.carbs_g * scale, 1),
+                fat_g=round(ing.macros.fat_g * scale, 1),
+                fiber_g=(
+                    round(ing.macros.fiber_g * scale, 1)
+                    if ing.macros.fiber_g is not None
+                    else None
+                ),
+            )
+            log_items.append(
+                MealLogItem(
+                    item_id=f"item_{uuid.uuid4().hex[:12]}",
+                    log_id=log_id,
+                    food_id=ing.food_id,
+                    display_name=ing.name,
+                    brand=ing.brand,
+                    input_quantity=scaled_grams,
+                    input_unit="g",
+                    input_state=ing.preparation_state,
+                    resolved_grams_ref=scaled_grams,
+                    macros=scaled_macros,
+                )
+            )
+
+        total_macros = sum_macros([i.macros for i in log_items])
+        meal_slot = resolve_meal_slot(
+            suggestion.meal_slot,
+            profile.meal_slots,
+            language=profile.language,
+        )
+        meal_log = MealLog(
+            log_id=log_id,
+            person_id=profile.person_id,
+            log_date=log_date or date.today(),
+            meal_slot=meal_slot,
+            logged_at=datetime.now(UTC),
+            status=MealStatus.CONFIRMED,
+            source_channel="suggestion_accept",
+            raw_input_text=suggestion.title,
+            total_macros=total_macros,
+            plan_item_id=None,
+            items=log_items,
+        )
+        await self._meal_repo.create_meal_log(meal_log)
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "suggestion_logged_as_meal",
+            person_id=profile.person_id,
+            scale=scale,
+            item_count=len(log_items),
+        )
+        return meal_log
+
     async def _generate_safe_day(
         self,
         *,
@@ -493,9 +632,11 @@ class MealPlannerService:
         slots: list[MealSlotConfig],
         system_prompt: str,
         user_prompt: str,
+        resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] | None = None,
     ) -> list[tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]]:
         prompt = user_prompt
         last_violations: list[str] = []
+        cache = resolve_cache if resolve_cache is not None else {}
         for _attempt in range(MAX_SAFETY_RETRIES + 1):
             resp = await llm_client.generate_structured(
                 system_prompt=system_prompt,
@@ -518,6 +659,8 @@ class MealPlannerService:
                 profile=profile,
                 skeletons=resp.meals,
                 ctx=ctx,
+                llm_client=llm_client,
+                resolve_cache=cache,
             )
             if not violations and len(passed) == len(resp.meals):
                 return passed
@@ -538,9 +681,11 @@ class MealPlannerService:
         slot_name: str,
         system_prompt: str,
         user_prompt: str,
+        resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] | None = None,
     ) -> tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]:
         prompt = user_prompt
         last_violations: list[str] = []
+        cache = resolve_cache if resolve_cache is not None else {}
         for _attempt in range(MAX_SAFETY_RETRIES + 1):
             resp = await llm_client.generate_structured(
                 system_prompt=system_prompt,
@@ -552,6 +697,8 @@ class MealPlannerService:
                 profile=profile,
                 skeletons=[resp.meal],
                 ctx=ctx,
+                llm_client=llm_client,
+                resolve_cache=cache,
             )
             if not violations and passed:
                 return passed[0]
@@ -569,12 +716,16 @@ class MealPlannerService:
         profile: PersonProfile,
         skeletons: list[PlannedMealSkeleton],
         ctx: PreferenceContext,
+        llm_client: LLMClient | None = None,
+        resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] | None = None,
     ) -> tuple[
         list[tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]],
         list[str],
     ]:
         all_violations: list[str] = []
         accepted: list[tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]] = []
+        estimator = LLMFoodEstimatorAdapter(llm_client) if llm_client is not None else None
+        cache = resolve_cache if resolve_cache is not None else {}
 
         for skel in skeletons:
             raw_names = [i.name for i in skel.ingredients]
@@ -591,13 +742,24 @@ class MealPlannerService:
             resolved_foods: list[EffectiveFood | None] = []
             scalable: list[ScalableIngredientInput] = []
             for spec in skel.ingredients:
-                food = await self._resolver.resolve_food_candidate(
-                    person_id=profile.person_id,
-                    name=spec.name,
-                    brand=spec.brand,
-                    state=spec.preparation_state,
-                    language=profile.language,
+                cache_key = (
+                    normalize_text(spec.name),
+                    normalize_text(spec.brand or ""),
+                    spec.preparation_state,
                 )
+                if cache_key in cache:
+                    food = cache[cache_key]
+                else:
+                    food = await self._resolver.resolve_food_candidate(
+                        person_id=profile.person_id,
+                        name=spec.name,
+                        brand=spec.brand,
+                        state=spec.preparation_state,
+                        language=profile.language,
+                        llm_estimator=estimator,
+                    )
+                    cache[cache_key] = food
+
                 resolved_foods.append(food)
                 role = classify_ingredient_role(food, spec.role)
                 eff_state = spec.preparation_state
@@ -616,6 +778,7 @@ class MealPlannerService:
                         preparation_state=eff_state,
                         role=role,
                         brand=spec.brand,
+                        course=spec.course,
                     )
                 )
 
@@ -632,6 +795,148 @@ class MealPlannerService:
             accepted.append((skel, scalable))
 
         return accepted, list(dict.fromkeys(all_violations))
+
+    async def _build_vault_catalog_hint(self, profile: PersonProfile) -> str:
+        """Build a compact categorized list of verified Food Vault names for the Chef."""
+        foods = await self._resolver.list_vault_foods(
+            person_id=profile.person_id, limit=120
+        )
+        if not foods:
+            return ""
+        buckets: dict[str, list[str]] = {
+            "Protein": [],
+            "Carbs": [],
+            "Legumes": [],
+            "Dairy": [],
+            "Vegetables": [],
+            "Fruit": [],
+            "Fats": [],
+        }
+        cat_to_bucket = {
+            "poultry": "Protein",
+            "red_meat": "Protein",
+            "fish": "Protein",
+            "egg": "Protein",
+            "rice": "Carbs",
+            "pasta": "Carbs",
+            "grains": "Carbs",
+            "oats": "Carbs",
+            "bread": "Carbs",
+            "potatoes": "Carbs",
+            "legumes": "Legumes",
+            "dairy": "Dairy",
+            "vegetables": "Vegetables",
+            "fruit": "Fruit",
+            "oil": "Fats",
+            "nuts": "Fats",
+        }
+        for food in foods:
+            bucket = cat_to_bucket.get(food.category.lower())
+            if bucket is None or len(buckets[bucket]) >= 8:
+                continue
+            label = food.localized_name(profile.language)
+            if label not in buckets[bucket]:
+                buckets[bucket].append(label)
+        lines = [
+            f"- {bucket}: {', '.join(names)}"
+            for bucket, names in buckets.items()
+            if names
+        ]
+        return "\n".join(lines)[:1000]
+
+    @staticmethod
+    def _detect_suggestion_quality_issues(
+        candidates: list[tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]],
+        *,
+        ctx: PreferenceContext,
+        requested_count: int,
+        user_hint: str = "",
+    ) -> list[str]:
+        """Flag unresolved ingredients, same-day food repetition, or duplicate bases."""
+        issues: list[str] = []
+        hint_norm = normalize_text(user_hint)
+
+        # 1. Check excessive unresolved ingredients (> 25% missing nutrition)
+        for skel, ings in candidates:
+            if not ings:
+                continue
+            missing = sum(1 for i in ings if i.food is None)
+            if missing / len(ings) > 0.25:
+                issues.append(
+                    f"Option '{skel.title}' has unresolved ingredients; use clear single whole-food names."
+                )
+                break
+
+        # 2. Check same-day repetition of primary savory anchors unless explicitly requested
+        eaten_norms = [
+            (raw, normalize_text(raw))
+            for raw in ctx.eaten_today_foods
+            if normalize_text(raw)
+        ]
+        savory_cats = {"pasta", "rice", "legumes", "poultry", "fish", "red_meat"}
+        for _skel, ings in candidates:
+            for ing in ings:
+                ing_cat = ing.food.category.lower() if ing.food is not None else ""
+                is_primary = ing.role == IngredientRole.PROTEIN_ANCHOR or ing_cat in savory_cats
+                if not is_primary:
+                    continue
+                ing_norm = normalize_text(ing.name)
+                if not ing_norm:
+                    continue
+                for raw_eaten, eaten_norm in eaten_norms:
+                    if eaten_norm in hint_norm:
+                        continue
+                    eaten_tokens = [t for t in eaten_norm.split() if len(t) >= 4]
+                    ing_tokens = {t for t in ing_norm.split() if len(t) >= 4}
+                    if (
+                        eaten_norm == ing_norm
+                        or (eaten_tokens and any(tok in ing_tokens for tok in eaten_tokens))
+                    ):
+                        issues.append(
+                            f"Avoid repeating '{raw_eaten}' already eaten earlier today."
+                        )
+                        break
+
+        # 3. Check cross-option anchor diversity when >= 2 options exist
+        if requested_count >= 2 and len(candidates) >= 2:
+            signatures: list[tuple[str, str]] = []
+            heavy_carb_cats: list[str] = []
+            for _skel, ings in candidates:
+                prot = next(
+                    (
+                        normalize_text(i.name).split()[0]
+                        for i in ings
+                        if i.role == IngredientRole.PROTEIN_ANCHOR and normalize_text(i.name)
+                    ),
+                    "",
+                )
+                carb_ing = next(
+                    (i for i in ings if i.role == IngredientRole.CARB_ANCHOR),
+                    None,
+                )
+                carb = (
+                    normalize_text(carb_ing.name).split()[0]
+                    if carb_ing and normalize_text(carb_ing.name)
+                    else ""
+                )
+                signatures.append((prot, carb))
+                if carb_ing and carb_ing.food is not None:
+                    c_cat = carb_ing.food.category.lower()
+                    if c_cat in {"pasta", "rice", "legumes"}:
+                        heavy_carb_cats.append(c_cat)
+
+            non_empty = [sig for sig in signatures if sig != ("", "")]
+            if len(non_empty) >= 2 and len(set(non_empty)) < len(non_empty):
+                issues.append(
+                    "Multiple options share the same protein/carb base; vary protein AND carb across options."
+                )
+            for repeated_cat in ("pasta", "legumes"):
+                if heavy_carb_cats.count(repeated_cat) >= 2:
+                    issues.append(
+                        f"Do not propose multiple {repeated_cat} options; diversify bases cleanly."
+                    )
+
+        return list(dict.fromkeys(issues))
 
     @staticmethod
     def _build_plan_item(

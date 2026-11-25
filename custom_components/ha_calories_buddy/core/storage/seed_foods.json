@@ -1596,5 +1596,438 @@
       }
     ],
     "name_it": "Zucchero Bianco"
+  },
+  {
+    "food_id": "seed_sea_bream_raw",
+    "name": "Sea Bream / Sea Bass (Raw)",
+    "aliases": [
+      "orata",
+      "branzino",
+      "spigola",
+      "filetto di orata",
+      "filetto di branzino",
+      "sea bream",
+      "sea bass"
+    ],
+    "category": "fish",
+    "preparation_state": "raw",
+    "kcal": 105,
+    "protein_g": 20.0,
+    "carbs_g": 0.0,
+    "fat_g": 2.5,
+    "fiber_g": 0.0,
+    "yield_factor": 0.8,
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 180.0
+      }
+    ],
+    "name_it": "Orata / Branzino (Crudo)"
+  },
+  {
+    "food_id": "seed_shrimp_raw",
+    "name": "Shrimp / Prawns (Raw)",
+    "aliases": [
+      "gamberi",
+      "gamberetti",
+      "mazzancolle",
+      "shrimp",
+      "prawns"
+    ],
+    "category": "fish",
+    "preparation_state": "raw",
+    "kcal": 71,
+    "protein_g": 14.0,
+    "carbs_g": 0.0,
+    "fat_g": 1.2,
+    "fiber_g": 0.0,
+    "yield_factor": 0.78,
+    "portions": [],
+    "name_it": "Gamberi / Mazzancolle (Crudi)"
+  },
+  {
+    "food_id": "seed_swordfish_raw",
+    "name": "Swordfish Steak (Raw)",
+    "aliases": [
+      "pesce spada",
+      "trancio di pesce spada",
+      "swordfish"
+    ],
+    "category": "fish",
+    "preparation_state": "raw",
+    "kcal": 121,
+    "protein_g": 19.8,
+    "carbs_g": 0.0,
+    "fat_g": 4.0,
+    "fiber_g": 0.0,
+    "yield_factor": 0.8,
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 180.0
+      }
+    ],
+    "name_it": "Pesce Spada (Crudo)"
+  },
+  {
+    "food_id": "seed_mozzarella_light",
+    "name": "Mozzarella Light",
+    "aliases": [
+      "mozzarella light",
+      "light mozzarella"
+    ],
+    "category": "dairy",
+    "preparation_state": "ready_to_eat",
+    "kcal": 163,
+    "protein_g": 19.5,
+    "carbs_g": 1.2,
+    "fat_g": 9.0,
+    "fiber_g": 0.0,
+    "yield_factor": 1.0,
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 125.0
+      }
+    ],
+    "name_it": "Mozzarella Light"
+  },
+  {
+    "food_id": "seed_feta",
+    "name": "Greek Feta Cheese",
+    "aliases": [
+      "feta",
+      "feta greca",
+      "formaggio feta"
+    ],
+    "category": "dairy",
+    "preparation_state": "ready_to_eat",
+    "kcal": 264,
+    "protein_g": 14.2,
+    "carbs_g": 4.1,
+    "fat_g": 21.3,
+    "fiber_g": 0.0,
+    "yield_factor": 1.0,
+    "portions": [],
+    "name_it": "Feta Greca"
+  },
+  {
+    "food_id": "seed_stracchino",
+    "name": "Stracchino / Crescenza Cheese",
+    "aliases": [
+      "stracchino",
+      "crescenza"
+    ],
+    "category": "dairy",
+    "preparation_state": "ready_to_eat",
+    "kcal": 300,
+    "protein_g": 18.5,
+    "carbs_g": 0.0,
+    "fat_g": 25.0,
+    "fiber_g": 0.0,
+    "yield_factor": 1.0,
+    "portions": [],
+    "name_it": "Stracchino / Crescenza"
+  },
+  {
+    "food_id": "seed_couscous_raw",
+    "name": "Couscous (Dry)",
+    "aliases": [
+      "couscous",
+      "cous cous",
+      "couscous crudo"
+    ],
+    "category": "grains",
+    "preparation_state": "raw",
+    "kcal": 356,
+    "protein_g": 12.8,
+    "carbs_g": 72.0,
+    "fat_g": 1.0,
+    "fiber_g": 3.5,
+    "yield_factor": 2.5,
+    "portions": [],
+    "name_it": "Couscous (Crudo)"
+  },
+  {
+    "food_id": "seed_orzo_barley_raw",
+    "name": "Pearl Barley (Dry)",
+    "aliases": [
+      "orzo",
+      "orzo perlato",
+      "pearl barley",
+      "barley"
+    ],
+    "category": "grains",
+    "preparation_state": "raw",
+    "kcal": 319,
+    "protein_g": 10.4,
+    "carbs_g": 64.0,
+    "fat_g": 1.4,
+    "fiber_g": 9.2,
+    "yield_factor": 2.5,
+    "portions": [],
+    "name_it": "Orzo Perlato (Crudo)"
+  },
+  {
+    "food_id": "seed_buckwheat_raw",
+    "name": "Buckwheat (Dry)",
+    "aliases": [
+      "grano saraceno",
+      "buckwheat"
+    ],
+    "category": "grains",
+    "preparation_state": "raw",
+    "kcal": 343,
+    "protein_g": 13.3,
+    "carbs_g": 61.5,
+    "fat_g": 3.4,
+    "fiber_g": 10.0,
+    "yield_factor": 2.6,
+    "portions": [],
+    "name_it": "Grano Saraceno (Crudo)"
+  },
+  {
+    "food_id": "seed_potatoes_cooked",
+    "name": "Boiled / Baked Potatoes (Plain)",
+    "aliases": [
+      "patate lesse",
+      "patate bollite",
+      "patate al forno",
+      "patate cotte",
+      "boiled potatoes",
+      "baked potatoes"
+    ],
+    "category": "potatoes",
+    "preparation_state": "cooked",
+    "kcal": 81,
+    "protein_g": 2.1,
+    "carbs_g": 16.8,
+    "fat_g": 0.1,
+    "fiber_g": 2.3,
+    "yield_factor": 0.95,
+    "portions": [],
+    "name_it": "Patate Lesse / Al Forno"
+  },
+  {
+    "food_id": "seed_eggplant_raw",
+    "name": "Eggplant / Aubergine (Raw)",
+    "aliases": [
+      "melanzane",
+      "melanzana",
+      "eggplant",
+      "aubergine"
+    ],
+    "category": "vegetables",
+    "preparation_state": "raw",
+    "kcal": 25,
+    "protein_g": 1.0,
+    "carbs_g": 2.9,
+    "fat_g": 0.2,
+    "fiber_g": 3.0,
+    "yield_factor": 0.8,
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 250.0
+      }
+    ],
+    "name_it": "Melanzane (Crude)"
+  },
+  {
+    "food_id": "seed_green_beans_raw",
+    "name": "Green Beans (Raw)",
+    "aliases": [
+      "fagiolini",
+      "cornetti",
+      "green beans"
+    ],
+    "category": "vegetables",
+    "preparation_state": "raw",
+    "kcal": 31,
+    "protein_g": 1.8,
+    "carbs_g": 4.3,
+    "fat_g": 0.2,
+    "fiber_g": 2.7,
+    "yield_factor": 0.9,
+    "portions": [],
+    "name_it": "Fagiolini (Crudi)"
+  },
+  {
+    "food_id": "seed_mushrooms_raw",
+    "name": "Button Mushrooms (Raw)",
+    "aliases": [
+      "funghi",
+      "funghi champignon",
+      "mushrooms",
+      "champignon"
+    ],
+    "category": "vegetables",
+    "preparation_state": "raw",
+    "kcal": 22,
+    "protein_g": 3.1,
+    "carbs_g": 2.3,
+    "fat_g": 0.3,
+    "fiber_g": 1.0,
+    "yield_factor": 0.7,
+    "portions": [],
+    "name_it": "Funghi Champignon (Crudi)"
+  },
+  {
+    "food_id": "seed_arugula_raw",
+    "name": "Arugula / Rocket",
+    "aliases": [
+      "rucola",
+      "rughetta",
+      "arugula",
+      "rocket"
+    ],
+    "category": "vegetables",
+    "preparation_state": "ready_to_eat",
+    "kcal": 25,
+    "protein_g": 2.6,
+    "carbs_g": 2.1,
+    "fat_g": 0.7,
+    "fiber_g": 1.6,
+    "yield_factor": 1.0,
+    "portions": [],
+    "name_it": "Rucola"
+  },
+  {
+    "food_id": "seed_fennel_raw",
+    "name": "Fennel",
+    "aliases": [
+      "finocchi",
+      "finocchio",
+      "fennel"
+    ],
+    "category": "vegetables",
+    "preparation_state": "ready_to_eat",
+    "kcal": 31,
+    "protein_g": 1.2,
+    "carbs_g": 4.2,
+    "fat_g": 0.2,
+    "fiber_g": 3.1,
+    "yield_factor": 1.0,
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 220.0
+      }
+    ],
+    "name_it": "Finocchi"
+  },
+  {
+    "food_id": "seed_cucumber",
+    "name": "Cucumber",
+    "aliases": [
+      "cetrioli",
+      "cetriolo",
+      "cucumber"
+    ],
+    "category": "vegetables",
+    "preparation_state": "ready_to_eat",
+    "kcal": 15,
+    "protein_g": 0.7,
+    "carbs_g": 3.1,
+    "fat_g": 0.1,
+    "fiber_g": 0.5,
+    "yield_factor": 1.0,
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 200.0
+      }
+    ],
+    "name_it": "Cetrioli"
+  },
+  {
+    "food_id": "seed_pear",
+    "name": "Pear",
+    "aliases": [
+      "pera",
+      "pere",
+      "pear",
+      "pears"
+    ],
+    "category": "fruit",
+    "preparation_state": "ready_to_eat",
+    "kcal": 57,
+    "protein_g": 0.4,
+    "carbs_g": 12.1,
+    "fat_g": 0.1,
+    "fiber_g": 3.1,
+    "yield_factor": 1.0,
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 180.0
+      }
+    ],
+    "name_it": "Pera"
+  },
+  {
+    "food_id": "seed_kiwi",
+    "name": "Kiwi",
+    "aliases": [
+      "kiwi"
+    ],
+    "category": "fruit",
+    "preparation_state": "ready_to_eat",
+    "kcal": 61,
+    "protein_g": 1.1,
+    "carbs_g": 11.7,
+    "fat_g": 0.5,
+    "fiber_g": 3.0,
+    "yield_factor": 1.0,
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 85.0
+      }
+    ],
+    "name_it": "Kiwi"
+  },
+  {
+    "food_id": "seed_hazelnuts",
+    "name": "Hazelnuts",
+    "aliases": [
+      "nocciole",
+      "hazelnuts"
+    ],
+    "category": "nuts",
+    "preparation_state": "ready_to_eat",
+    "kcal": 628,
+    "protein_g": 15.0,
+    "carbs_g": 7.0,
+    "fat_g": 60.8,
+    "fiber_g": 9.7,
+    "yield_factor": 1.0,
+    "portions": [],
+    "name_it": "Nocciole"
+  },
+  {
+    "food_id": "seed_pesto_genovese",
+    "name": "Basil Pesto (Pesto alla Genovese)",
+    "aliases": [
+      "pesto",
+      "pesto alla genovese",
+      "basil pesto"
+    ],
+    "category": "oil",
+    "preparation_state": "ready_to_eat",
+    "kcal": 455,
+    "protein_g": 4.8,
+    "carbs_g": 5.5,
+    "fat_g": 46.0,
+    "fiber_g": 2.0,
+    "yield_factor": 1.0,
+    "portions": [
+      {
+        "unit_name": "tbsp",
+        "grams": 15.0
+      }
+    ],
+    "name_it": "Pesto alla Genovese"
   }
 ]

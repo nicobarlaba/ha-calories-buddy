@@ -1,6 +1,6 @@
 # HA Calories Buddy — User & Operator Manual
 
-**Version:** `0.2.2` (Phase 2 — *The Dietitian & Chef* + Fiber, Vault Pagination & HA AI Task)  
+**Version:** `0.2.3` (Phase 2 — *The Dietitian & Chef* + Fiber, Vault Pagination, HA AI Task, Smart Multi-Course Suggestions & Realtime Card Sync)  
 **Minimum Home Assistant:** `2026.10.0` (verified on `2026.11.3` / Python `3.14`)  
 **Languages:** English (`en`) & Italian (`it`)
 
@@ -151,7 +151,7 @@ Every night at `23:55` (and whenever you log weight manually), the coordinator p
 
 ## 7. Daily Usage: Custom Lovelace Card
 
-In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.2` is registered automatically on startup.
+In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.3` is registered automatically on startup.
 
 1. Refresh your browser (`Ctrl+Shift+R` / clear mobile app cache once).
 2. Edit a dashboard → **+ Add Card** → search **HA Calories Buddy** (or add YAML `type: custom:ha-calories-buddy-card`).
@@ -168,7 +168,8 @@ In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-c
 - **Inline Edit, Undo Delete & Quick Weight Entry:** Edit any logged item's quantity/unit/state at any time, undo deletes on the toast banner, and record morning weight (`kg`) directly into SQLite snapshots.
 
 ### Meal Planning & Dynamic Rebalancing (`Plan` Tab)
-- **Suggest Meal ("What should I eat now?"):** Pick a meal slot, optional craving/hint, and max cook time to generate 1–3 macro-scaled recipe options constrained by your allergies and likes/dislikes.
+- **Realtime Assist ↔ Card Sync:** Voice/Assist logs and service calls emit `ha_calories_buddy_updated` and read fresh SQLite totals, so the Custom Card refreshes automatically without reloading the page (plus a quick `↻` refresh button in the header).
+- **Suggest Meal ("What should I eat now?"):** Pick a meal slot, **Budget Mode** (`Auto` smart remaining, `Full remaining today`, or `Standard slot share`), optional craving/hint, and max cook time to generate 3 completely distinct **alternative options** constrained by your allergies and what you already ate earlier today. For large meals (`>= 650 kcal`), proposals automatically structure multi-course components (`Secondo`, `Contorno`, `Pane / Carbo`, `Frutta / Extra`) and **Log as Eaten** saves the entire dish as 1 grouped meal entry.
 - **Generate 1–7 Day Plan:** Create an active personalized meal plan with optional **Meal Prep Batch Mode** (batches repeated lunches/dinners to minimize cooking). Every meal is deterministically scaled by Python's bounded algebraic solver to within `±5%` of your daily target.
 - **Interactive Daily Controls:** Expand ingredients & preparation steps, swap any single meal (`Swap`), click **Eaten (`✅`)** to promote a planned dish into today's `MealLog` in 1 tap (choosing `1.0x`, `0.75x`, `1.25x`, etc.), rate dishes (`Like`, `Dislike`, `Never Suggest`), or click **Rebalance Today** to adjust dinner/snacks after an unplanned meal (with multi-day smoothing option if over budget).
 
@@ -211,7 +212,7 @@ HA Calories Buddy registers a native Home Assistant Assist `llm.API` (`HA Calori
 4. Click **Save to Global Vault** (instantly available to every household member) or **Save & Log Meal** to save and record a portion immediately.
 
 ### Two-Tier Food Vault (`Food Vault` Tab)
-- **Global Food Vault & Pagination:** Pre-seeded with 68 verified bilingual Italian/English staples (including paired raw & cooked variants with yield factors and fiber), plus every barcode scan or custom food you save. Filter across category chips (`All`, `Protein`, `Carbs`, `Legumes`, `Dairy`, `Produce`, `Fats`, `Other`) and browse the entire catalog with `Previous` / `Next` pagination controls.
+- **Global Food Vault & Pagination:** Pre-seeded with 88 verified bilingual Italian/English staples (including paired raw & cooked variants with yield factors and fiber), plus every barcode scan or custom food you save. Filter across category chips (`All`, `Protein`, `Carbs`, `Legumes`, `Dairy`, `Produce`, `Fats`, `Other`) and browse the entire catalog with `Previous` / `Next` pagination controls.
 - **Personal Overrides:** Click **Edit** on any food to create a per-person override without affecting other family members:
   - Set a **Personal Alias** (e.g., *"My al dente basmati"*).
   - Customize macros (including **Fiber / 100g**) or your personal cooked/raw **Yield Factor**.
@@ -307,7 +308,7 @@ If your Home Assistant uses `lovelace: mode: yaml` instead of UI storage mode, a
 lovelace:
   mode: yaml
   resources:
-    - url: /ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.2
+    - url: /ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.3
       type: module
 ```
 
@@ -325,7 +326,7 @@ title: Calories Buddy
 ## 13. Troubleshooting & FAQ
 
 - **Custom Card shows "Custom element doesn't exist: ha-calories-buddy-card":**  
-  Hard-refresh your browser (`Ctrl+Shift+R`) or clear cache in the Home Assistant Companion app. Confirm under **Settings → Dashboards → Resources** that `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.2` is listed (if using YAML mode, follow [Section 12](#12-lovelace-yaml-mode-setup)).
+  Hard-refresh your browser (`Ctrl+Shift+R`) or clear cache in the Home Assistant Companion app. Confirm under **Settings → Dashboards → Resources** that `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.3` is listed (if using YAML mode, follow [Section 12](#12-lovelace-yaml-mode-setup)).
 - **Camera barcode scanner button is disabled:**  
   Live camera scanning requires HTTPS (or `localhost`) plus browser `BarcodeDetector` support (Chromium/Android WebView; iOS Safari lacks native `BarcodeDetector`). Type or paste the EAN digits directly into the manual lookup input—it works everywhere.
 - **Voice logging from a shared smart speaker returns an ambiguity error:**  

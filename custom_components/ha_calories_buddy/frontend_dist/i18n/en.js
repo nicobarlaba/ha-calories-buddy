@@ -1,6 +1,7 @@
-/** English localization strings for ha-calories-buddy-card v0.2.0 */
+/** English localization strings for ha-calories-buddy-card v0.2.3 */
 export const EN = {
   title: "Calories Buddy",
+  refresh_btn: "Refresh",
   tab_today: "Today",
   tab_plan: "Plan",
   tab_vault: "Food Vault",
@@ -99,6 +100,16 @@ export const EN = {
   generate_now_btn: "Generate Menu",
   suggest_hint_placeholder: "Craving, leftover ingredients, quick max 15 min...",
   max_time_label: "Max min",
+  budget_mode_label: "Budget Mode",
+  budget_mode_auto: "Auto (smart remaining)",
+  budget_mode_remaining: "Full remaining today",
+  budget_mode_slot: "Standard slot share",
+  budget_used_slot_standard: "Standard slot share",
+  budget_used_remaining_last_slot: "Full remaining today",
+  budget_used_remaining_full: "Full remaining today",
+  budget_used_remaining_shared: "Remaining shared across slots",
+  budget_used_over_budget_light: "Light (target nearly met)",
+  suggest_options_banner: "{count} alternative options for {slot} — pick 1",
   log_as_eaten_btn: "Log as Eaten",
   swap_btn: "Swap",
   recipe_btn: "Recipe",

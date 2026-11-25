@@ -1,4 +1,4 @@
-/** HA Calories Buddy Custom Lovelace Card v0.2.0 (Zero-Build Modular ES Web Component) */
+/** HA Calories Buddy Custom Lovelace Card v0.2.3 (Zero-Build Modular ES Web Component) */
 import { CaloriesBuddyApi } from "./api.js";
 import { openBarcodeScannerModal } from "./components/barcode-scanner.js";
 import { t } from "./i18n/index.js";
@@ -36,6 +36,8 @@ class HaCaloriesBuddyCard extends HTMLElement {
       showGenerateForm: false,
       showSuggestForm: false,
       suggestions: [],
+      suggestMeta: null,
+      suggestBudgetMode: "auto",
       swappingItemId: null,
     };
     this._prefState = {
@@ -54,6 +56,79 @@ class HaCaloriesBuddyCard extends HTMLElement {
       macroPieMode: null,
     };
     this._initialized = false;
+    this._eventUnsub = null;
+    this._subscribedConn = null;
+    this._refreshTimer = null;
+    this._lastSensorStamp = "";
+  }
+
+  disconnectedCallback() {
+    if (this._refreshTimer) {
+      clearTimeout(this._refreshTimer);
+      this._refreshTimer = null;
+    }
+    this._unsubscribeEvents();
+  }
+
+  _unsubscribeEvents() {
+    const unsub = this._eventUnsub;
+    this._eventUnsub = null;
+    this._subscribedConn = null;
+    if (typeof unsub === "function") {
+      try {
+        unsub();
+      } catch (_err) {
+        // Ignore teardown errors
+      }
+    } else if (unsub && typeof unsub.then === "function") {
+      unsub
+        .then((fn) => {
+          if (typeof fn === "function") fn();
+        })
+        .catch(() => {});
+    }
+  }
+
+  _ensureEventSubscription() {
+    const conn = this._hass?.connection;
+    if (!conn?.subscribeEvents || this._subscribedConn === conn) return;
+    this._unsubscribeEvents();
+    this._subscribedConn = conn;
+    this._eventUnsub = conn.subscribeEvents((ev) => {
+      const pid = ev?.data?.person_id;
+      if (!pid || pid === this._activePersonId) {
+        this._scheduleLiveRefresh();
+      }
+    }, "ha_calories_buddy_updated");
+  }
+
+  _watchSensorUpdates(hass) {
+    const states = hass?.states;
+    if (!states) return;
+    const parts = [];
+    for (const key of Object.keys(states)) {
+      if (!key.startsWith("sensor.calories_buddy_")) continue;
+      const st = states[key];
+      parts.push(`${key}:${st.last_updated || st.last_changed || st.state}`);
+    }
+    parts.sort();
+    const stamp = parts.join("|");
+    if (this._initialized && this._lastSensorStamp && stamp !== this._lastSensorStamp) {
+      this._scheduleLiveRefresh();
+    }
+    this._lastSensorStamp = stamp;
+  }
+
+  _scheduleLiveRefresh() {
+    if (this._uiState.busy) return;
+    if (this._refreshTimer) clearTimeout(this._refreshTimer);
+    this._refreshTimer = setTimeout(async () => {
+      this._refreshTimer = null;
+      await this._loadDashboard();
+      if (this._activeTab === "plan" && this._planState.plan) {
+        await this._loadPlan();
+      }
+    }, 300);
   }
 
   setConfig(config) {
@@ -76,6 +151,9 @@ class HaCaloriesBuddyCard extends HTMLElement {
     if (hass?.language && !this._dashboard?.person?.language) {
       this._uiState.language = hass.language.startsWith("it") ? "it" : "en";
     }
+
+    this._ensureEventSubscription();
+    this._watchSensorUpdates(hass);
 
     if (firstSet && !this._initialized) {
       this._initialized = true;
@@ -230,6 +308,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
                   ? `<span class="pill">${escapeHtml(this._dashboard.person.display_name)}</span>`
                   : ""
             }
+            <button type="button" class="chip-btn" id="btn-refresh-card" title="${escapeHtml(t(lang, "refresh_btn"))}" ${this._uiState.busy ? "disabled" : ""}>↻</button>
           </div>
         </div>
 
@@ -261,11 +340,23 @@ class HaCaloriesBuddyCard extends HTMLElement {
       </ha-card>
     `;
 
+    this.shadowRoot.querySelector("#btn-refresh-card")?.addEventListener("click", async () => {
+      await this._loadDashboard();
+      if (this._activeTab === "plan") {
+        await this._loadPlan();
+      } else if (this._activeTab === "vault") {
+        await this._loadVault(this._vaultState.query, this._vaultState.category, this._vaultState.offset);
+      } else if (this._activeTab === "preferences") {
+        await this._loadPreferences();
+      }
+    });
+
     this.shadowRoot.querySelector("#person-select")?.addEventListener("change", async (ev) => {
       this._activePersonId = ev.target.value;
       this._uiState.editingItemId = null;
       this._planState.plan = null;
       this._planState.suggestions = [];
+      this._planState.suggestMeta = null;
       this._prefState.loaded = false;
       await this._loadDashboard();
       if (this._activeTab === "vault") {
@@ -430,21 +521,24 @@ class HaCaloriesBuddyCard extends HTMLElement {
           this._withBusy(async () => {
             const resp = await this._api.suggestMeal(this._activePersonId, opts);
             this._planState.suggestions = resp.suggestions || [];
+            this._planState.suggestBudgetMode = opts.budget_mode || "auto";
+            this._planState.suggestMeta = {
+              target_macros: resp.target_macros || null,
+              budget_mode_used: resp.budget_mode_used || opts.budget_mode || "auto",
+              meal_slot: resp.meal_slot || opts.meal_slot || "",
+            };
             this._planState.showSuggestForm = false;
           }),
         onLogSuggestion: (sug) =>
           this._withBusy(async () => {
-            for (const ing of sug.ingredients || []) {
-              await this._api.logItem(this._activePersonId, {
-                food_id: ing.food_id || undefined,
-                name: ing.name,
-                quantity: ing.grams,
-                unit: "g",
-                state: ing.preparation_state || "unspecified",
-                meal_slot: sug.meal_slot,
-              });
-            }
+            await this._api.logSuggestion(
+              this._activePersonId,
+              sug,
+              1.0,
+              this._dashboard?.date || null
+            );
             this._planState.suggestions = [];
+            this._planState.suggestMeta = null;
             await this._loadDashboard();
           }),
         onPromotePlanMeal: (planItemId, scale) =>

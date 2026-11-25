@@ -10,6 +10,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 
 from custom_components.ha_calories_buddy.const import (
+    EVENT_DATA_UPDATED,
     LLM_PROVIDER_HA_AI_TASK,
     LLM_PROVIDER_NONE,
 )
@@ -124,6 +125,16 @@ class DomainRuntime:
         """Return True when an active LLM provider is configured for this person."""
         cfg = self.get_effective_llm_config(profile)
         return cfg.provider not in ("", LLM_PROVIDER_NONE, "disabled")
+
+    async def async_notify_person_updated(self, person_id: str, reason: str) -> None:
+        """Refresh coordinator state synchronously and broadcast a live UI update event."""
+        person_rt = self.persons.get(person_id)
+        if person_rt is not None:
+            await person_rt.coordinator.async_refresh()
+        self.hass.bus.async_fire(
+            EVENT_DATA_UPDATED,
+            {"person_id": person_id, "reason": reason},
+        )
 
     def update_usda_api_key(self, api_key: str | None) -> None:
         """Refresh the USDA provider and dependent services when Hub options change."""

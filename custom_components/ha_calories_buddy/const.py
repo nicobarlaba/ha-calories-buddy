@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "ha_calories_buddy"
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 
 STORAGE_DB_FILENAME = "ha_calories_buddy.db"
 
@@ -115,6 +115,7 @@ LLM_PROVIDERS = [
 ]
 
 # Event / Service / WS constants
+EVENT_DATA_UPDATED = f"{DOMAIN}_updated"
 ATTR_PERSON = "person"
 ATTR_PERSON_ID = "person_id"
 ATTR_TEXT = "text"

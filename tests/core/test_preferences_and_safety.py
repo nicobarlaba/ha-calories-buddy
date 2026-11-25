@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -158,8 +158,45 @@ async def test_preference_repo_two_tier_crud_isolation_and_feedback(db: Database
     assert "Coriander" not in alice_ctx.disliked_items
     assert "Coriander" in bob_ctx.disliked_items
     assert "peanuts" in {t.lower() for t in bob_ctx.hard_constraints}
-    assert any("Rolled Oats" in f for f in alice_ctx.top_frequent_foods)
+    # Cold-start guard: single-day food appears in eaten_today_foods, NOT top_frequent_foods
+    assert "Rolled Oats" in alice_ctx.eaten_today_foods
+    assert not alice_ctx.top_frequent_foods
     assert not bob_ctx.top_frequent_foods
+
+    # Logging the same food across 2 earlier distinct days (3 distinct days total) promotes it
+    for day_offset, lid in ((1, "log_a2"), (2, "log_a3")):
+        await meal_repo.create_meal_log(
+            MealLog(
+                log_id=lid,
+                person_id="p_alice",
+                log_date=date.today() - timedelta(days=day_offset),
+                meal_slot="Breakfast",
+                logged_at=datetime.now(UTC) - timedelta(days=day_offset),
+                status=MealStatus.CONFIRMED,
+                raw_input_text="Oats",
+                total_macros=Macros(kcal=300, protein_g=11, carbs_g=47, fat_g=6),
+                items=[
+                    MealLogItem(
+                        item_id=f"item_{lid}",
+                        log_id=lid,
+                        food_id=None,
+                        display_name="Rolled Oats",
+                        brand="Quaker",
+                        input_quantity=80,
+                        input_unit="g",
+                        input_state=PreparationState.RAW,
+                        resolved_grams_ref=80,
+                        macros=Macros(kcal=300, protein_g=11, carbs_g=47, fat_g=6),
+                    )
+                ],
+            )
+        )
+    alice_ctx_multi = await engine.build_context(alice)
+    assert any("Rolled Oats" in f for f in alice_ctx_multi.top_frequent_foods)
+
+    eaten_names, _ = await meal_repo.get_eaten_today_foods("p_alice", date.today())
+    assert "Rolled Oats" in eaten_names
+
     assert "pollo e riso basmati" in {t.lower() for t in alice_ctx.never_suggest_titles}
     assert await pref_repo.delete_feedback("p_bob", fb2.feedback_id) is False
     assert await pref_repo.delete_feedback("p_alice", fb2.feedback_id) is True

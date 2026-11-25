@@ -403,6 +403,7 @@ class PlannedIngredient(BaseModel):
     grams: float = Field(gt=0.0)
     preparation_state: PreparationState = PreparationState.READY_TO_EAT
     role: IngredientRole = IngredientRole.PRODUCE_FIXED
+    course: str | None = None
     macros: Macros
 
 
@@ -460,6 +461,8 @@ class MealSuggestion(BaseModel):
     tips: str = ""
     ingredients: list[PlannedIngredient] = Field(default_factory=list)
     macros: Macros
+    target_macros: Macros | None = None
+    budget_mode: str = "auto"
     macro_fit_warning: bool = False
 
 

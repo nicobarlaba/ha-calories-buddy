@@ -415,21 +415,31 @@ class MealRepository:
         return titles[:25]
 
     async def get_top_frequent_foods(
-        self, person_id: str, limit: int = 25
+        self,
+        person_id: str,
+        limit: int = 25,
+        *,
+        min_distinct_days: int = 1,
     ) -> list[dict[str, Any]]:
         """Return most frequently consumed foods/brands for NLP hints & preference scoring."""
+        having_sql = "HAVING COUNT(DISTINCT ml.log_date) >= ?" if min_distinct_days > 1 else ""
+        params: list[Any] = [person_id, MealStatus.CONFIRMED.value]
+        if min_distinct_days > 1:
+            params.append(int(min_distinct_days))
+        params.append(limit)
         rows = await self._db.fetch_all(
-            """
+            f"""
             SELECT mli.food_id, mli.display_name, mli.brand, COUNT(*) AS freq,
                    MAX(ml.log_date) AS last_date
             FROM meal_log_items mli
             JOIN meal_logs ml ON mli.log_id = ml.log_id
             WHERE ml.person_id = ? AND ml.status = ?
             GROUP BY COALESCE(mli.food_id, mli.display_name), mli.brand
+            {having_sql}
             ORDER BY freq DESC, last_date DESC
             LIMIT ?
             """,
-            (person_id, MealStatus.CONFIRMED.value, limit),
+            tuple(params),
         )
         return [
             {
@@ -441,6 +451,36 @@ class MealRepository:
             }
             for row in rows
         ]
+
+    async def get_eaten_today_foods(
+        self, person_id: str, target_date: date
+    ) -> tuple[list[str], list[str]]:
+        """Return deduplicated food names and categories already eaten on target_date."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT mli.display_name, LOWER(COALESCE(gf.category, '')) AS category
+            FROM meal_log_items mli
+            JOIN meal_logs ml ON mli.log_id = ml.log_id
+            LEFT JOIN global_foods gf ON mli.food_id = gf.food_id
+            WHERE ml.person_id = ? AND ml.log_date = ? AND ml.status != ?
+            ORDER BY ml.logged_at ASC
+            """,
+            (person_id, target_date.isoformat(), MealStatus.DELETED.value),
+        )
+        food_names: list[str] = []
+        categories: list[str] = []
+        seen_names: set[str] = set()
+        seen_cats: set[str] = set()
+        for row in rows:
+            name = str(row["display_name"] or "").strip()
+            if name and name.lower() not in seen_names:
+                seen_names.add(name.lower())
+                food_names.append(name)
+            cat = str(row["category"] or "").strip().lower()
+            if cat and cat not in seen_cats:
+                seen_cats.add(cat)
+                categories.append(cat)
+        return food_names, categories
 
     async def _get_items_for_logs(
         self, log_ids: list[str]

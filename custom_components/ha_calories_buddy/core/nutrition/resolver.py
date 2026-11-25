@@ -175,6 +175,14 @@ class FoodResolver:
                 added_ext += 1
         return merged[:safe_limit], total_count + added_ext
 
+    async def list_vault_foods(
+        self,
+        person_id: str | None = None,
+        limit: int = 120,
+    ) -> list[EffectiveFood]:
+        """List local Food Vault staples cleanly without exposing internal repositories."""
+        return await self._food_repo.list_foods(person_id=person_id, limit=limit)
+
     async def resolve_food_candidate(
         self,
         *,
@@ -184,9 +192,10 @@ class FoodResolver:
         food_id: str | None = None,
         state: PreparationState = PreparationState.UNSPECIFIED,
         language: str = "en",
+        llm_estimator: LLMEstimatorProtocol | None = None,
     ) -> EffectiveFood | None:
         """Resolve the best EffectiveFood candidate for planning/recipe ingredient scaling."""
-        return await self._resolve_food_entity(
+        resolved = await self._resolve_food_entity(
             person_id=person_id,
             name=name,
             brand=brand,
@@ -195,6 +204,16 @@ class FoodResolver:
             food_id=food_id,
             language=language,
         )
+        if resolved is None and llm_estimator is not None:
+            estimated = await llm_estimator.estimate_food(
+                name=name,
+                brand=brand,
+                preparation_state=state,
+                language=language,
+            )
+            if estimated is not None:
+                resolved = self._food_to_effective_unpersisted(estimated)
+        return resolved
 
     async def resolve_item(
         self,

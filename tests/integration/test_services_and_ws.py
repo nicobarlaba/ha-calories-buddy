@@ -19,6 +19,7 @@ from custom_components.ha_calories_buddy.const import (
     CONF_LLM_PROVIDER,
     CONF_PERSON_ID,
     DOMAIN,
+    EVENT_DATA_UPDATED,
     LLM_PROVIDER_OLLAMA,
 )
 from tests.integration.conftest import setup_hub_and_persons
@@ -53,6 +54,11 @@ async def test_services_and_websocket_multi_user_isolation(
         ],
     )
 
+    events_received: list[dict[str, object]] = []
+    unsub_events = hass.bus.async_listen(
+        EVENT_DATA_UPDATED, lambda ev: events_received.append(dict(ev.data))
+    )
+
     # 1. Service log_meal_text via mocked Ollama response
     parsed_json = json.dumps(
         {
@@ -79,8 +85,10 @@ async def test_services_and_websocket_multi_user_isolation(
             blocking=True,
             return_response=True,
         )
+    await hass.async_block_till_done()
     assert svc_resp is not None
     assert svc_resp["needs_confirmation"] is True
+    assert any(e.get("person_id") == "person_admin" for e in events_received)
     log_id = svc_resp["meal_log"]["log_id"]
 
     # Confirm pending meal via service
@@ -94,6 +102,7 @@ async def test_services_and_websocket_multi_user_isolation(
     )
     assert conf_resp is not None
     assert conf_resp["meal_log"]["status"] == "confirmed"
+    unsub_events()
 
     # 2. WebSocket client automatically routes to hass_admin_user -> person_admin
     client = await hass_ws_client(hass)

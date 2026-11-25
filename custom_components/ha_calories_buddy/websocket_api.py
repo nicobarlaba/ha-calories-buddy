@@ -23,6 +23,7 @@ from custom_components.ha_calories_buddy.core.models import (
     LabelStandard,
     Macros,
     MealFeedbackRating,
+    MealSuggestion,
     PersonFoodOverride,
     PersonProfile,
     PlanGenerationOptions,
@@ -35,7 +36,7 @@ from custom_components.ha_calories_buddy.core.nutrition.yield_factors import (
     default_yield_for_category,
 )
 from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
-    allocate_slot_targets,
+    compute_smart_slot_budget,
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     default_slots_for_language,
@@ -135,21 +136,13 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             return
 
         req_date = date.fromisoformat(msg["date"]) if msg.get("date") else state.today
-        if req_date == state.today:
-            totals = state.totals
-            meals = state.meals
-            planned_today = state.planned_today
-        else:
-            totals = await runtime.meal_repo.get_daily_totals(
-                profile.person_id, req_date
-            )
-            meals = await runtime.meal_repo.list_meals_for_date(
-                profile.person_id, req_date
-            )
-            planned_pairs = await runtime.plan_repo.get_plan_items_for_range(
-                profile.person_id, req_date, req_date
-            )
-            planned_today = [item for _, item in planned_pairs]
+        # Always read fresh SQLite totals/meals/plan so external Assist or service edits appear immediately
+        totals = await runtime.meal_repo.get_daily_totals(profile.person_id, req_date)
+        meals = await runtime.meal_repo.list_meals_for_date(profile.person_id, req_date)
+        planned_pairs = await runtime.plan_repo.get_plan_items_for_range(
+            profile.person_id, req_date, req_date
+        )
+        planned_today = [item for _, item in planned_pairs]
 
         connection.send_result(
             msg["id"],
@@ -185,20 +178,24 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         profile = _resolve_ws_person(hass, connection, msg)
         if profile is None:
             return
+        local_now = dt_util.now()
         try:
             res = await runtime.logging_service.log_from_text(
                 profile,
                 msg["text"],
-                log_date=date.fromisoformat(msg["date"]) if msg.get("date") else None,
+                log_date=(
+                    date.fromisoformat(msg["date"])
+                    if msg.get("date")
+                    else local_now.date()
+                ),
                 meal_slot=msg.get("meal_slot"),
                 source_channel="card_ai",
+                current_local_time=local_now.strftime("%H:%M"),
             )
         except Exception as exc:  # noqa: BLE001
             connection.send_error(msg["id"], "log_text_failed", str(exc))
             return
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(profile.person_id, "ws_log_text")
         connection.send_result(msg["id"], res.model_dump(mode="json"))
 
     @websocket_command(
@@ -234,12 +231,14 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             unit=str(msg.get("unit", "g")),
             state=PreparationState(msg.get("state", "unspecified")),
             meal_slot=msg.get("meal_slot"),
-            log_date=date.fromisoformat(msg["date"]) if msg.get("date") else None,
+            log_date=(
+                date.fromisoformat(msg["date"])
+                if msg.get("date")
+                else dt_util.now().date()
+            ),
             source_channel="card_manual",
         )
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(profile.person_id, "ws_log_item")
         connection.send_result(msg["id"], res.model_dump(mode="json"))
 
     @websocket_command(
@@ -268,9 +267,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         if meal is None:
             connection.send_error(msg["id"], "not_found", "Meal log not found")
             return
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(profile.person_id, "ws_confirm_meal")
         connection.send_result(msg["id"], {"meal_log": meal.model_dump(mode="json")})
 
     @websocket_command(
@@ -306,9 +303,9 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         if meal is None:
             connection.send_error(msg["id"], "not_found", "Meal item not found")
             return
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_update_meal_item"
+        )
         connection.send_result(msg["id"], {"meal_log": meal.model_dump(mode="json")})
 
     @websocket_command(
@@ -331,9 +328,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         deleted = await runtime.meal_repo.soft_delete_meal(
             profile.person_id, msg["log_id"]
         )
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(profile.person_id, "ws_delete_meal")
         connection.send_result(msg["id"], {"deleted": deleted})
 
     @websocket_command(
@@ -356,9 +351,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         restored = await runtime.meal_repo.restore_meal(
             profile.person_id, msg["log_id"]
         )
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(profile.person_id, "ws_restore_meal")
         connection.send_result(msg["id"], {"restored": restored})
 
     @websocket_command(
@@ -559,7 +552,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         snap = await person_rt.coordinator.async_persist_today_snapshot(
             override_weight_kg=float(msg["weight_kg"])
         )
-        await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(profile.person_id, "ws_log_weight")
         connection.send_result(msg["id"], {"snapshot": snap.model_dump(mode="json")})
 
     @websocket_command(
@@ -586,9 +579,9 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         if meal is None:
             connection.send_error(msg["id"], "not_found", "Meal log not found")
             return
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_update_meal_slot"
+        )
         connection.send_result(msg["id"], {"meal_log": meal.model_dump(mode="json")})
 
     @websocket_command(
@@ -672,7 +665,9 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         except Exception as exc:  # noqa: BLE001
             connection.send_error(msg["id"], "generate_plan_failed", str(exc))
             return
-        await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_generate_plan"
+        )
         connection.send_result(msg["id"], {"plan": plan.model_dump(mode="json")})
 
     @websocket_command(
@@ -683,6 +678,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             vol.Optional("hint", default=""): str,
             vol.Optional("max_cook_minutes"): vol.Coerce(int),
             vol.Optional("count", default=3): vol.Coerce(int),
+            vol.Optional("budget_mode", default="auto"): str,
         }
     )
     @async_response
@@ -710,16 +706,15 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         slot_name = resolve_meal_slot(
             msg.get("meal_slot"), slots, language=profile.language
         )
-        slot_targets = allocate_slot_targets(data.targets, slots)
-        slot_macro = slot_targets.get(
+        today = dt_util.now().date()
+        totals = await runtime.meal_repo.get_daily_totals(profile.person_id, today)
+        slot_macro, mode_used = compute_smart_slot_budget(
+            data.targets,
+            slots,
             slot_name,
-            Macros(
-                kcal=data.targets.target_kcal * 0.35,
-                protein_g=data.targets.protein_g * 0.35,
-                carbs_g=data.targets.carbs_g * 0.35,
-                fat_g=data.targets.fat_g * 0.35,
-                fiber_g=data.targets.fiber_g * 0.35,
-            ),
+            totals.consumed,
+            set(totals.by_slot.keys()),
+            budget_mode=str(msg.get("budget_mode") or "auto"),
         )
         try:
             suggestions = await runtime.planner_service.suggest_meal(
@@ -729,13 +724,62 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
                 user_hint=str(msg.get("hint") or ""),
                 max_cook_minutes=msg.get("max_cook_minutes"),
                 count=max(1, min(3, int(msg.get("count", 3)))),
+                reference_date=today,
+                budget_mode=mode_used,
             )
         except Exception as exc:  # noqa: BLE001
             connection.send_error(msg["id"], "suggest_meal_failed", str(exc))
             return
         connection.send_result(
             msg["id"],
-            {"suggestions": [s.model_dump(mode="json") for s in suggestions]},
+            {
+                "suggestions": [s.model_dump(mode="json") for s in suggestions],
+                "target_macros": slot_macro.model_dump(mode="json"),
+                "budget_mode_used": mode_used,
+                "meal_slot": slot_name,
+            },
+        )
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/log_suggestion",
+            vol.Required("suggestion"): dict,
+            vol.Optional("scale", default=1.0): vol.Coerce(float),
+            vol.Optional("date"): str,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_log_suggestion(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        try:
+            suggestion = MealSuggestion.model_validate(msg["suggestion"])
+            target_date = (
+                date.fromisoformat(msg["date"])
+                if msg.get("date")
+                else dt_util.now().date()
+            )
+            meal_log = await runtime.planner_service.log_suggestion_as_meal(
+                profile,
+                suggestion,
+                log_date=target_date,
+                actual_scale=float(msg.get("scale", 1.0)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            connection.send_error(msg["id"], "log_suggestion_failed", str(exc))
+            return
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_log_suggestion"
+        )
+        connection.send_result(
+            msg["id"], {"meal_log": meal_log.model_dump(mode="json")}
         )
 
     @websocket_command(
@@ -765,9 +809,9 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         except Exception as exc:  # noqa: BLE001
             connection.send_error(msg["id"], "swap_failed", str(exc))
             return
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_swap_plan_meal"
+        )
         connection.send_result(msg["id"], {"plan_item": item.model_dump(mode="json")})
 
     @websocket_command(
@@ -797,9 +841,9 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         except Exception as exc:  # noqa: BLE001
             connection.send_error(msg["id"], "promote_failed", str(exc))
             return
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_promote_plan_meal"
+        )
         connection.send_result(
             msg["id"], {"meal_log": meal_log.model_dump(mode="json")}
         )
@@ -861,7 +905,9 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         except Exception as exc:  # noqa: BLE001
             connection.send_error(msg["id"], "rebalance_failed", str(exc))
             return
-        await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_rebalance_today"
+        )
         connection.send_result(msg["id"], {"rebalance": res.model_dump(mode="json")})
 
     @websocket_command(
@@ -992,6 +1038,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         ws_get_plan,
         ws_generate_plan,
         ws_suggest_meal,
+        ws_log_suggestion,
         ws_swap_plan_meal,
         ws_promote_plan_meal,
         ws_rebalance_today,

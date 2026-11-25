@@ -263,7 +263,7 @@ async def test_vault_pagination_categories_and_meal_slot_edit(
     profile = _make_profile(lang="it")
     await profile_repo.upsert_person(profile)
 
-    # Full pagination walk across all 68+ seeded foods
+    # Full pagination walk across all 88+ seeded foods
     page1, total1 = await resolver.search_foods_paginated(
         "", person_id="p_nico", limit=25, offset=0, language="it", include_external=False
     )
@@ -273,11 +273,15 @@ async def test_vault_pagination_categories_and_meal_slot_edit(
     page3, total3 = await resolver.search_foods_paginated(
         "", person_id="p_nico", limit=25, offset=50, language="it", include_external=False
     )
-    assert total1 == total2 == total3 >= 68
+    page4, total4 = await resolver.search_foods_paginated(
+        "", person_id="p_nico", limit=25, offset=75, language="it", include_external=False
+    )
+    assert total1 == total2 == total3 == total4 >= 88
     assert len(page1) == 25 and 25 < total1
     assert len(page2) == 25 and 50 < total2
-    assert len(page3) >= 18 and 50 + len(page3) == total3
-    all_ids = {f.food_id for f in [*page1, *page2, *page3]}
+    assert len(page3) == 25 and 75 < total3
+    assert len(page4) >= 13 and 75 + len(page4) == total4
+    all_ids = {f.food_id for f in [*page1, *page2, *page3, *page4]}
     assert len(all_ids) == total1
 
     # Category group filtering

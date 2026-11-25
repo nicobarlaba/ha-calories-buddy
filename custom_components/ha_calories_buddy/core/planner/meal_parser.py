@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 
 from pydantic import BaseModel, Field
 
@@ -130,6 +130,7 @@ class MealLoggingService:
         log_date: date | None = None,
         meal_slot: str | None = None,
         source_channel: str = "voice",
+        current_local_time: str | None = None,
     ) -> LogMealResult:
         """Parse natural language text via LLM and persist deterministically."""
         llm_client = self._get_llm(profile)
@@ -139,7 +140,7 @@ class MealLoggingService:
         frequent_foods = await self._meal_repo.get_top_frequent_foods(
             profile.person_id, limit=25
         )
-        now_hhmm = datetime.now().strftime("%H:%M")
+        now_hhmm = current_local_time or datetime.now().strftime("%H:%M")
         sys_prompt, user_prompt = build_meal_parse_prompts(
             profile=profile,
             utterance=text,
@@ -167,10 +168,19 @@ class MealLoggingService:
             )
             resolved_items.append(resolved)
 
+        parsed_now_time: time | None = None
+        if current_local_time:
+            try:
+                parts = current_local_time.strip().split(":")
+                parsed_now_time = time(int(parts[0]), int(parts[1]))
+            except (ValueError, IndexError):
+                parsed_now_time = None
+
         chosen_slot = resolve_meal_slot(
             meal_slot or parsed.meal_slot,
             profile.meal_slots,
             language=profile.language,
+            now_time=parsed_now_time,
         )
         return await self._persist_resolved_meal(
             profile=profile,

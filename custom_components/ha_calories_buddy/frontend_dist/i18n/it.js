@@ -1,6 +1,7 @@
-/** Italian localization strings for ha-calories-buddy-card v0.2.0 */
+/** Italian localization strings for ha-calories-buddy-card v0.2.3 */
 export const IT = {
   title: "Calories Buddy",
+  refresh_btn: "Aggiorna",
   tab_today: "Oggi",
   tab_plan: "Piano",
   tab_vault: "Archivio",
@@ -99,6 +100,16 @@ export const IT = {
   generate_now_btn: "Genera Menu",
   suggest_hint_placeholder: "Cosa ti va, ingredienti in frigo, veloce max 15 min...",
   max_time_label: "Min max",
+  budget_mode_label: "Modalità Budget",
+  budget_mode_auto: "Auto (residuo intelligente)",
+  budget_mode_remaining: "Tutto il residuo di oggi",
+  budget_mode_slot: "Quota standard del pasto",
+  budget_used_slot_standard: "Quota standard del pasto",
+  budget_used_remaining_last_slot: "Residuo giornaliero completo",
+  budget_used_remaining_full: "Residuo giornaliero completo",
+  budget_used_remaining_shared: "Residuo ripartito sui pasti rimanenti",
+  budget_used_over_budget_light: "Leggero (target quasi raggiunto)",
+  suggest_options_banner: "{count} opzioni alternative per {slot} — scegline 1",
   log_as_eaten_btn: "Segna come Mangiato",
   swap_btn: "Cambia",
   recipe_btn: "Ricetta",

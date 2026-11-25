@@ -430,4 +430,31 @@ export const CARD_STYLES = `
     gap: 8px;
     flex-wrap: wrap;
   }
+  .suggest-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(3, 169, 244, 0.08);
+    border: 1px solid rgba(3, 169, 244, 0.24);
+    margin-bottom: 10px;
+    font-size: 0.82rem;
+  }
+  .course-line {
+    margin-top: 3px;
+    line-height: 1.45;
+  }
+  .course-tag {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.16));
+    color: var(--primary-text-color);
+    margin-right: 4px;
+  }
 `;

@@ -15,13 +15,12 @@ from homeassistant.util.json import JsonValueType
 from custom_components.ha_calories_buddy.const import DOMAIN
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
-    Macros,
     PlanGenerationOptions,
     PlanItemStatus,
     PreparationState,
 )
 from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
-    allocate_slot_targets,
+    compute_smart_slot_budget,
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     default_slots_for_language,
@@ -78,11 +77,14 @@ class LogMealTool(llm.Tool):
                 explicit_person=args.get("person"),
                 context_user_id=_user_id_from_llm_context(llm_context),
             )
+            local_now = dt_util.now()
             result = await runtime.logging_service.log_from_text(
                 profile,
                 str(args["text"]),
+                log_date=local_now.date(),
                 meal_slot=args.get("meal_slot"),
                 source_channel="voice",
+                current_local_time=local_now.strftime("%H:%M"),
             )
         except (PersonNotFoundError, PersonAmbiguousError) as exc:
             return llm.ToolResult(data={"error": str(exc)}, error=True)
@@ -95,9 +97,7 @@ class LogMealTool(llm.Tool):
             )
             return llm.ToolResult(data={"error": str(exc)}, error=True)
 
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(profile.person_id, "assist_log_meal")
 
         warnings_json: list[JsonValueType] = list(result.warnings)
         return llm.ToolResult(
@@ -211,9 +211,9 @@ class CorrectLastMealTool(llm.Tool):
                 error=True,
             )
 
-        person_rt = runtime.persons.get(profile.person_id)
-        if person_rt is not None:
-            await person_rt.coordinator.async_request_refresh()
+        await runtime.async_notify_person_updated(
+            profile.person_id, "assist_correct_meal"
+        )
 
         return llm.ToolResult(
             data={
@@ -319,6 +319,7 @@ class SuggestMealTool(llm.Tool):
             vol.Optional("meal_slot"): str,
             vol.Optional("hint"): str,
             vol.Optional("max_cook_minutes"): vol.Coerce(int),
+            vol.Optional("budget_mode", default="auto"): str,
             vol.Optional("person"): str,
         }
     )
@@ -346,25 +347,25 @@ class SuggestMealTool(llm.Tool):
             slot_name = resolve_meal_slot(
                 args.get("meal_slot"), slots, language=profile.language
             )
-            rem_kcal = data.targets.target_kcal - data.totals.consumed.kcal
-            if rem_kcal > 150.0 and data.totals.consumed.kcal > 0:
-                budget = Macros(
-                    kcal=max(180.0, rem_kcal),
-                    protein_g=max(10.0, data.targets.protein_g - data.totals.consumed.protein_g),
-                    carbs_g=max(0.0, data.targets.carbs_g - data.totals.consumed.carbs_g),
-                    fat_g=max(3.0, data.targets.fat_g - data.totals.consumed.fat_g),
-                    fiber_g=max(0.0, data.targets.fiber_g - (data.totals.consumed.fiber_g or 0.0)),
-                )
-            else:
-                slot_targets = allocate_slot_targets(data.targets, slots)
-                budget = slot_targets[slot_name]
+            today = dt_util.now().date()
+            totals = await runtime.meal_repo.get_daily_totals(profile.person_id, today)
+            budget, mode_used = compute_smart_slot_budget(
+                data.targets,
+                slots,
+                slot_name,
+                totals.consumed,
+                set(totals.by_slot.keys()),
+                budget_mode=str(args.get("budget_mode") or "auto"),
+            )
             suggestions = await runtime.planner_service.suggest_meal(
                 profile,
                 meal_slot=slot_name,
                 target_macros=budget,
                 user_hint=str(args.get("hint") or ""),
                 max_cook_minutes=args.get("max_cook_minutes"),
-                count=2,
+                count=3,
+                reference_date=today,
+                budget_mode=mode_used,
             )
         except Exception as exc:  # noqa: BLE001
             return llm.ToolResult(data={"error": str(exc)}, error=True)
@@ -379,13 +380,22 @@ class SuggestMealTool(llm.Tool):
                 "fat_g": s.macros.fat_g,
                 "fiber_g": s.macros.fiber_g or 0.0,
                 "ingredients": [
-                    f"{i.name} {round(i.grams)}g" for i in s.ingredients
+                    f"[{i.course}] {i.name} {round(i.grams)}g"
+                    if i.course
+                    else f"{i.name} {round(i.grams)}g"
+                    for i in s.ingredients
                 ],
             }
             for s in suggestions
         ]
         return llm.ToolResult(
-            data={"person": profile.display_name, "meal_slot": slot_name, "options": opts_json}
+            data={
+                "person": profile.display_name,
+                "meal_slot": slot_name,
+                "target_kcal": round(budget.kcal),
+                "budget_mode_used": mode_used,
+                "options": opts_json,
+            }
         )
 
 
@@ -438,7 +448,9 @@ class GenerateMealPlanTool(llm.Tool):
                     notes=str(args.get("notes") or ""),
                 ),
             )
-            await person_rt.coordinator.async_request_refresh()
+            await runtime.async_notify_person_updated(
+                profile.person_id, "assist_generate_plan"
+            )
         except Exception as exc:  # noqa: BLE001
             return llm.ToolResult(data={"error": str(exc)}, error=True)
 
@@ -521,9 +533,9 @@ class SwapPlanMealTool(llm.Tool):
                 item.plan_item_id,
                 user_instruction=str(args.get("instruction") or ""),
             )
-            person_rt = runtime.persons.get(profile.person_id)
-            if person_rt is not None:
-                await person_rt.coordinator.async_request_refresh()
+            await runtime.async_notify_person_updated(
+                profile.person_id, "assist_swap_plan_meal"
+            )
         except Exception as exc:  # noqa: BLE001
             return llm.ToolResult(data={"error": str(exc)}, error=True)
 
@@ -591,7 +603,9 @@ class RebalanceTodayTool(llm.Tool):
                     target_date=data.today,
                     daily_targets=data.targets,
                 )
-            await person_rt.coordinator.async_request_refresh()
+            await runtime.async_notify_person_updated(
+                profile.person_id, "assist_rebalance_today"
+            )
         except Exception as exc:  # noqa: BLE001
             return llm.ToolResult(data={"error": str(exc)}, error=True)
 
