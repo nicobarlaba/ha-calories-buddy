@@ -2,17 +2,24 @@
   "config": {
     "step": {
       "hub": {
-        "title": "Household Hub & AI Configuration",
-        "description": "Configure the shared Household Hub for HA Calories Buddy.\n\nLLM Capability & Privacy Notice: Natural-language voice/text logging and AI meal suggestions depend directly on the chosen model's structured-output quality (smaller local models may require occasional confirmation). Cloud APIs (OpenAI, Anthropic, Gemini) incur provider costs and transmit meal/profile context externally; local engines (Ollama, LM Studio) keep all data on-premises. Select 'None' to use manual & barcode logging completely offline.",
+        "title": "Household Hub — Language & AI Provider",
+        "description": "Configure the shared Household Hub for HA Calories Buddy.\n\nChoose how AI parsing and meal planning run: select 'Home Assistant AI Task' to reuse an existing HA AI integration (Google AI, OpenAI, etc.) without duplicating API keys or Ollama URLs, or pick Ollama / cloud APIs directly. After clicking Submit, Step 2 shows only the fields needed for your chosen provider. Select 'None' for 100% offline manual & barcode tracking.",
         "data": {
           "language": "Default Language",
           "llm_provider": "Default LLM Provider",
-          "ai_task_entity": "Home Assistant AI Task Entity (for HA AI Task provider)",
-          "llm_api_key": "API Key (for cloud providers)",
-          "llm_base_url": "Base URL (Ollama / LM Studio / custom endpoint)",
-          "llm_model": "Model Name (e.g. gpt-4o-mini, gemini-2.5-flash, qwen2.5:14b)",
           "usda_api_key": "USDA FoodData Central API Key (optional)",
           "global_baseline_notes": "Household Food Baseline Notes (optional)"
+        }
+      },
+      "hub_llm": {
+        "title": "Provider Settings ({provider})",
+        "description": "Enter only the settings required for '{provider}'. Increase the timeout (e.g. 180s) if using slower local models for multi-recipe meal planning.",
+        "data": {
+          "ai_task_entity": "Home Assistant AI Task Entity",
+          "llm_api_key": "API Key",
+          "llm_base_url": "Base URL",
+          "llm_model": "Model Name",
+          "llm_timeout_s": "Request Timeout (seconds)"
         }
       },
       "person_identity": {
@@ -80,7 +87,8 @@
           "ai_task_entity": "Home Assistant AI Task Entity (for HA AI Task provider)",
           "llm_api_key": "API Key",
           "llm_base_url": "Base URL",
-          "llm_model": "Model Name"
+          "llm_model": "Model Name",
+          "llm_timeout_s": "Request Timeout (seconds)"
         }
       },
       "person_diet": {
@@ -117,17 +125,24 @@
         }
       },
       "hub_options": {
-        "title": "Household Hub Settings",
-        "description": "LLM Capability & Privacy Notice: Cloud APIs incur provider fees and send meal context externally; local Ollama / LM Studio endpoints remain on-premises.",
+        "title": "Household Hub — Language & AI Provider",
+        "description": "Select the default LLM provider. When you click Submit, the next screen will display ONLY the fields relevant to that provider (selecting 'HA AI Task' will NOT require Ollama URLs or model fields).",
         "data": {
           "language": "Default Language",
           "llm_provider": "Default LLM Provider",
-          "ai_task_entity": "Home Assistant AI Task Entity (for HA AI Task provider)",
+          "usda_api_key": "USDA API Key (optional)",
+          "global_baseline_notes": "Household Baseline Notes"
+        }
+      },
+      "hub_options_llm": {
+        "title": "Provider Settings ({provider})",
+        "description": "Configure '{provider}'. For local Ollama models generating multi-meal suggestions/plans, keep timeout at 180s or higher.",
+        "data": {
+          "ai_task_entity": "Home Assistant AI Task Entity",
           "llm_api_key": "API Key",
           "llm_base_url": "Base URL",
           "llm_model": "Model Name",
-          "usda_api_key": "USDA API Key (optional)",
-          "global_baseline_notes": "Household Baseline Notes"
+          "llm_timeout_s": "Request Timeout (seconds)"
         }
       },
       "biometrics": {
@@ -181,7 +196,8 @@
           "ai_task_entity": "Home Assistant AI Task Entity",
           "llm_api_key": "API Key",
           "llm_base_url": "Base URL",
-          "llm_model": "Model Name"
+          "llm_model": "Model Name",
+          "llm_timeout_s": "Request Timeout (seconds)"
         }
       },
       "diet": {

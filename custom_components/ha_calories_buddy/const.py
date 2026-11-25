@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "ha_calories_buddy"
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 STORAGE_DB_FILENAME = "ha_calories_buddy.db"
 
@@ -25,6 +25,7 @@ CONF_LLM_API_KEY = "llm_api_key"
 CONF_LLM_BASE_URL = "llm_base_url"
 CONF_LLM_MODEL = "llm_model"
 CONF_AI_TASK_ENTITY = "ai_task_entity"
+CONF_LLM_TIMEOUT_S = "llm_timeout_s"
 CONF_LLM_TEMPERATURE = "llm_temperature"
 CONF_LANGUAGE = "language"
 CONF_USDA_API_KEY = "usda_api_key"
@@ -87,7 +88,9 @@ CONF_MEAL_SLOTS = "meal_slots"
 DEFAULT_MEAL_SLOTS_EN = "Breakfast, Lunch, Snack, Dinner"
 DEFAULT_MEAL_SLOTS_IT = "Colazione, Pranzo, Spuntino, Cena"
 DEFAULT_LLM_TEMPERATURE = 0.2
-DEFAULT_LLM_TIMEOUT_S = 30.0
+DEFAULT_LLM_TIMEOUT_S = 60.0
+DEFAULT_LLM_TIMEOUT_CLOUD_S = 60.0
+DEFAULT_LLM_TIMEOUT_LOCAL_S = 180.0
 DEFAULT_WEARABLE_CORRECTION_FACTOR = 1.0
 ATWATER_TOLERANCE_PCT = 0.15
 ATWATER_TOLERANCE_KCAL = 25.0

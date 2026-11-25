@@ -54,7 +54,12 @@ class OllamaClient(LLMClient):
                 data = await resp.json()
                 message = data.get("message") or {}
                 return str(message.get("content", ""))
-        except (TimeoutError, aiohttp.ClientError) as exc:
+        except TimeoutError as exc:
+            raise LLMConnectionError(
+                f"Ollama request timed out after {int(self._config.timeout_s)}s; "
+                "increase LLM timeout or use a faster model"
+            ) from exc
+        except aiohttp.ClientError as exc:
             raise LLMConnectionError(
                 f"Connection failed to Ollama endpoint: {type(exc).__name__}"
             ) from exc
@@ -62,8 +67,9 @@ class OllamaClient(LLMClient):
     async def health_check(self) -> bool:
         """Verify Ollama server availability via GET /api/tags."""
         url = f"{self._base_url}/api/tags"
+        probe_timeout = aiohttp.ClientTimeout(total=min(10.0, self._config.timeout_s))
         try:
-            async with self._session.get(url, timeout=self._timeout) as resp:
+            async with self._session.get(url, timeout=probe_timeout) as resp:
                 if resp.status != 200:
                     return False
                 if not self._config.model:

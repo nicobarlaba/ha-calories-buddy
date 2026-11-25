@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -19,7 +20,7 @@ from custom_components.ha_calories_buddy.core.logging import get_logger, log_eve
 from custom_components.ha_calories_buddy.core.models import LLMConfig
 
 _LOGGER = get_logger(__name__)
-INVALID_ENTITY_STATES = frozenset({"unavailable", "unknown"})
+INVALID_ENTITY_STATES = frozenset({"unavailable"})
 
 
 class HAAITaskLLMClient(LLMClient):
@@ -61,14 +62,15 @@ class HAAITaskLLMClient(LLMClient):
             service_data["entity_id"] = self._entity_id
 
         try:
-            response = await self._hass.services.async_call(
-                "ai_task",
-                "generate_data",
-                service_data,
-                blocking=True,
-                return_response=True,
-            )
-        except HomeAssistantError as exc:
+            async with asyncio.timeout(self._config.timeout_s):
+                response = await self._hass.services.async_call(
+                    "ai_task",
+                    "generate_data",
+                    service_data,
+                    blocking=True,
+                    return_response=True,
+                )
+        except (HomeAssistantError, TimeoutError) as exc:
             log_event(
                 _LOGGER,
                 logging.WARNING,
@@ -86,13 +88,18 @@ class HAAITaskLLMClient(LLMClient):
         return str(data_val)
 
     async def health_check(self) -> bool:
-        """Verify ai_task.generate_data exists and optional entity_id is healthy."""
+        """Verify ai_task.generate_data exists and target entity is usable."""
         if not self._hass.services.has_service("ai_task", "generate_data"):
             return False
         if self._entity_id:
             state = self._hass.states.get(self._entity_id)
             if state is None:
                 return False
-            if str(state.state).strip().lower() in INVALID_ENTITY_STATES:
-                return False
+            return str(state.state).strip().lower() not in INVALID_ENTITY_STATES
+        all_tasks = self._hass.states.async_all("ai_task")
+        if all_tasks:
+            return any(
+                str(st.state).strip().lower() not in INVALID_ENTITY_STATES
+                for st in all_tasks
+            )
         return True

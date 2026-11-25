@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
+from custom_components.ha_calories_buddy import _extract_llm_config
 from custom_components.ha_calories_buddy.const import (
     CONF_ACTIVITY_LEVEL,
     CONF_AI_TASK_ENTITY,
@@ -28,6 +29,7 @@ from custom_components.ha_calories_buddy.const import (
     CONF_LANGUAGE,
     CONF_LANGUAGE_OVERRIDE,
     CONF_LLM_PROVIDER,
+    CONF_LLM_TIMEOUT_S,
     CONF_MEAL_SLOTS,
     CONF_PERSON_ID,
     CONF_SEX,
@@ -39,6 +41,8 @@ from custom_components.ha_calories_buddy.const import (
     ENTRY_KIND_PERSON,
     LLM_PROVIDER_HA_AI_TASK,
     LLM_PROVIDER_NONE,
+    LLM_PROVIDER_OLLAMA,
+    LLM_PROVIDER_OPENAI,
 )
 from custom_components.ha_calories_buddy.core.llm.prompts.meal_plan import (
     DayPlanProposalSchema,
@@ -119,10 +123,12 @@ async def test_ha_ai_task_client_and_hub_config_flow(hass: HomeAssistant) -> Non
         },
     )
 
-    # 2. Missing entity -> unhealthy; unavailable -> unhealthy; idle -> healthy
+    # 2. Missing entity -> unhealthy; unavailable -> unhealthy; unknown & idle -> healthy
     assert await client.health_check() is False
     hass.states.async_set("ai_task.google_ai_task", "unavailable")
     assert await client.health_check() is False
+    hass.states.async_set("ai_task.google_ai_task", "unknown")
+    assert await client.health_check() is True
     hass.states.async_set("ai_task.google_ai_task", "idle")
     assert await client.health_check() is True
 
@@ -136,20 +142,38 @@ async def test_ha_ai_task_client_and_hub_config_flow(hass: HomeAssistant) -> Non
     assert len(calls) == 2
     assert calls[0]["entity_id"] == "ai_task.google_ai_task"
 
-    # 4. Hub ConfigFlow with ha_ai_task requires no API key or model field
+    # 4. _extract_llm_config timeout defaults: 180s for Ollama, 60s for cloud/ha_ai_task
+    assert _extract_llm_config({CONF_LLM_PROVIDER: LLM_PROVIDER_OLLAMA}).timeout_s == 180.0
+    assert _extract_llm_config({CONF_LLM_PROVIDER: LLM_PROVIDER_OPENAI}).timeout_s == 60.0
+    assert _extract_llm_config({CONF_LLM_PROVIDER: LLM_PROVIDER_HA_AI_TASK}).timeout_s == 60.0
+    assert (
+        _extract_llm_config(
+            {CONF_LLM_PROVIDER: LLM_PROVIDER_OLLAMA, CONF_LLM_TIMEOUT_S: 240.0}
+        ).timeout_s
+        == 240.0
+    )
+
+    # 5. Hub 2-step ConfigFlow with ha_ai_task requires no API key, URL, or model field
     flow_res = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
     assert flow_res["type"] is FlowResultType.FORM
     assert flow_res["step_id"] == "hub"
 
-    done_res = await hass.config_entries.flow.async_configure(
+    llm_step = await hass.config_entries.flow.async_configure(
         flow_res["flow_id"],
         {
             CONF_LANGUAGE: "it",
             CONF_LLM_PROVIDER: LLM_PROVIDER_HA_AI_TASK,
-            CONF_AI_TASK_ENTITY: "ai_task.google_ai_task",
         },
+    )
+    assert llm_step["type"] is FlowResultType.FORM
+    assert llm_step["step_id"] == "hub_llm"
+    assert {str(k) for k in llm_step["data_schema"].schema} == {CONF_AI_TASK_ENTITY}
+
+    done_res = await hass.config_entries.flow.async_configure(
+        flow_res["flow_id"],
+        {CONF_AI_TASK_ENTITY: "ai_task.google_ai_task"},
     )
     assert done_res["type"] is FlowResultType.CREATE_ENTRY
     assert done_res["data"][ENTRY_KIND] == ENTRY_KIND_HUB

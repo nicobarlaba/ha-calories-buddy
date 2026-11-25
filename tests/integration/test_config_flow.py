@@ -8,6 +8,7 @@ from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.ha_calories_buddy.const import (
     CONF_ACTIVITY_LEVEL,
+    CONF_AI_TASK_ENTITY,
     CONF_BIRTH_YEAR,
     CONF_DISPLAY_NAME,
     CONF_GOAL_TYPE,
@@ -20,6 +21,7 @@ from custom_components.ha_calories_buddy.const import (
     CONF_LLM_MODEL,
     CONF_LLM_OVERRIDE_ENABLED,
     CONF_LLM_PROVIDER,
+    CONF_LLM_TIMEOUT_S,
     CONF_MANUAL_CARBS_G,
     CONF_MANUAL_FAT_G,
     CONF_MANUAL_KCAL,
@@ -34,6 +36,7 @@ from custom_components.ha_calories_buddy.const import (
     ENTRY_KIND,
     ENTRY_KIND_HUB,
     ENTRY_KIND_PERSON,
+    LLM_PROVIDER_HA_AI_TASK,
     LLM_PROVIDER_NONE,
     LLM_PROVIDER_OLLAMA,
 )
@@ -50,19 +53,28 @@ async def test_hub_then_two_persons_config_flow(
         {"friendly_name": "Marco", "user_id": "ha_uid_marco"},
     )
 
-    # 1. First run creates the singleton Hub
+    # 1. First run creates the singleton Hub (2-step wizard: hub -> hub_llm)
     res1 = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
     assert res1["type"] is FlowResultType.FORM
     assert res1["step_id"] == "hub"
 
-    res1_done = await hass.config_entries.flow.async_configure(
+    res1_llm = await hass.config_entries.flow.async_configure(
         res1["flow_id"],
         {
             CONF_LANGUAGE: "it",
             CONF_LLM_PROVIDER: LLM_PROVIDER_OLLAMA,
+        },
+    )
+    assert res1_llm["type"] is FlowResultType.FORM
+    assert res1_llm["step_id"] == "hub_llm"
+
+    res1_done = await hass.config_entries.flow.async_configure(
+        res1["flow_id"],
+        {
             CONF_LLM_MODEL: "qwen2.5:14b",
+            CONF_LLM_TIMEOUT_S: 180.0,
         },
     )
     assert res1_done["type"] is FlowResultType.CREATE_ENTRY
@@ -166,15 +178,37 @@ async def test_hub_then_two_persons_config_flow(
     assert res3_done["type"] is FlowResultType.CREATE_ENTRY
     assert res3_done["data"][CONF_DISPLAY_NAME] == "Giulia"
 
-    # OptionsFlow works for both Hub and Person
+    # OptionsFlow works for both Hub and Person (switching Ollama -> HA AI Task & None)
     hub_entry = res1_done["result"]
+    hass.states.async_set("ai_task.google_ai_task_3_8", "unknown")
+    hass.services.async_register("ai_task", "generate_data", lambda _c: {"data": {}})
+
     opt_hub = await hass.config_entries.options.async_init(hub_entry.entry_id)
     assert opt_hub["step_id"] == "hub_options"
-    opt_hub_done = await hass.config_entries.options.async_configure(
+    opt_hub_llm = await hass.config_entries.options.async_configure(
         opt_hub["flow_id"],
+        {CONF_LANGUAGE: "it", CONF_LLM_PROVIDER: LLM_PROVIDER_HA_AI_TASK},
+    )
+    assert opt_hub_llm["step_id"] == "hub_options_llm"
+    schema_keys = {str(k) for k in opt_hub_llm["data_schema"].schema}
+    assert CONF_AI_TASK_ENTITY in schema_keys
+    assert "llm_base_url" not in schema_keys
+    assert CONF_LLM_MODEL not in schema_keys
+
+    opt_hub_ai_done = await hass.config_entries.options.async_configure(
+        opt_hub["flow_id"],
+        {CONF_AI_TASK_ENTITY: "ai_task.google_ai_task_3_8"},
+    )
+    assert opt_hub_ai_done["type"] is FlowResultType.CREATE_ENTRY
+    assert opt_hub_ai_done["data"][CONF_LLM_PROVIDER] == LLM_PROVIDER_HA_AI_TASK
+    assert opt_hub_ai_done["data"][CONF_AI_TASK_ENTITY] == "ai_task.google_ai_task_3_8"
+
+    opt_none = await hass.config_entries.options.async_init(hub_entry.entry_id)
+    opt_none_done = await hass.config_entries.options.async_configure(
+        opt_none["flow_id"],
         {CONF_LANGUAGE: "en", CONF_LLM_PROVIDER: LLM_PROVIDER_NONE},
     )
-    assert opt_hub_done["type"] is FlowResultType.CREATE_ENTRY
+    assert opt_none_done["type"] is FlowResultType.CREATE_ENTRY
 
     person_entry = res3_done["result"]
     opt_person = await hass.config_entries.options.async_init(person_entry.entry_id)

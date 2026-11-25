@@ -38,6 +38,7 @@ from custom_components.ha_calories_buddy.const import (
     CONF_LLM_MODEL,
     CONF_LLM_OVERRIDE_ENABLED,
     CONF_LLM_PROVIDER,
+    CONF_LLM_TIMEOUT_S,
     CONF_MANUAL_CARBS_G,
     CONF_MANUAL_FAT_G,
     CONF_MANUAL_FIBER_G,
@@ -62,6 +63,8 @@ from custom_components.ha_calories_buddy.const import (
     CONF_WEEKLY_RATE_KG,
     CONF_WEIGHT_ENTITY,
     DEFAULT_LANGUAGE,
+    DEFAULT_LLM_TIMEOUT_CLOUD_S,
+    DEFAULT_LLM_TIMEOUT_LOCAL_S,
     DEFAULT_MEAL_SLOTS_EN,
     DEFAULT_MEAL_SLOTS_IT,
     DEFAULT_WEARABLE_CORRECTION_FACTOR,
@@ -70,6 +73,8 @@ from custom_components.ha_calories_buddy.const import (
     ENTRY_KIND_HUB,
     ENTRY_KIND_PERSON,
     LLM_PROVIDER_NONE,
+    LLM_PROVIDER_OLLAMA,
+    LLM_PROVIDER_OPENAI_COMPAT,
     STORAGE_DB_FILENAME,
 )
 from custom_components.ha_calories_buddy.coordinator import PersonNutritionCoordinator
@@ -143,12 +148,27 @@ def _extract_llm_config(cfg: dict[str, Any]) -> LLMConfig:
     base_url = str(cfg.get(CONF_LLM_BASE_URL) or "").strip() or None
     model = str(cfg.get(CONF_LLM_MODEL) or "").strip()
     ai_task_entity = str(cfg.get(CONF_AI_TASK_ENTITY) or "").strip() or None
+    default_timeout = (
+        DEFAULT_LLM_TIMEOUT_LOCAL_S
+        if provider in (LLM_PROVIDER_OLLAMA, LLM_PROVIDER_OPENAI_COMPAT)
+        else DEFAULT_LLM_TIMEOUT_CLOUD_S
+    )
+    raw_timeout = cfg.get(CONF_LLM_TIMEOUT_S)
+    try:
+        timeout_s = (
+            max(15.0, min(600.0, float(raw_timeout)))
+            if raw_timeout not in (None, "")
+            else default_timeout
+        )
+    except (TypeError, ValueError):
+        timeout_s = default_timeout
     return LLMConfig(
         provider=provider,
         api_key=api_key,
         base_url=base_url,
         model=model,
         ai_task_entity=ai_task_entity,
+        timeout_s=timeout_s,
     )
 
 

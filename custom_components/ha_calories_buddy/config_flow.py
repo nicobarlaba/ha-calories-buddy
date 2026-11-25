@@ -37,6 +37,7 @@ from custom_components.ha_calories_buddy.const import (
     CONF_LLM_MODEL,
     CONF_LLM_OVERRIDE_ENABLED,
     CONF_LLM_PROVIDER,
+    CONF_LLM_TIMEOUT_S,
     CONF_MANUAL_CARBS_G,
     CONF_MANUAL_FAT_G,
     CONF_MANUAL_FIBER_G,
@@ -61,6 +62,8 @@ from custom_components.ha_calories_buddy.const import (
     CONF_WEEKLY_RATE_KG,
     CONF_WEIGHT_ENTITY,
     DEFAULT_LANGUAGE,
+    DEFAULT_LLM_TIMEOUT_CLOUD_S,
+    DEFAULT_LLM_TIMEOUT_LOCAL_S,
     DEFAULT_MEAL_SLOTS_EN,
     DEFAULT_MEAL_SLOTS_IT,
     DEFAULT_WEARABLE_CORRECTION_FACTOR,
@@ -173,8 +176,13 @@ def _suggested_ai_task_entity(defaults: dict[str, Any], hass: HomeAssistant | No
     return None
 
 
-def _hub_schema(defaults: dict[str, Any], hass: HomeAssistant | None = None) -> vol.Schema:
-    suggested_ai_task = _suggested_ai_task_entity(defaults, hass)
+def _default_timeout_for_provider(provider: str) -> float:
+    if provider in (LLM_PROVIDER_OLLAMA, LLM_PROVIDER_OPENAI_COMPAT):
+        return DEFAULT_LLM_TIMEOUT_LOCAL_S
+    return DEFAULT_LLM_TIMEOUT_CLOUD_S
+
+
+def _hub_base_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(
@@ -197,23 +205,6 @@ def _hub_schema(defaults: dict[str, Any], hass: HomeAssistant | None = None) -> 
                 )
             ),
             vol.Optional(
-                CONF_AI_TASK_ENTITY,
-                description={"suggested_value": suggested_ai_task},
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="ai_task")
-            ),
-            vol.Optional(
-                CONF_LLM_API_KEY, default=defaults.get(CONF_LLM_API_KEY, "")
-            ): selector.TextSelector(
-                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
-            ),
-            vol.Optional(
-                CONF_LLM_BASE_URL, default=defaults.get(CONF_LLM_BASE_URL, "")
-            ): selector.TextSelector(),
-            vol.Optional(
-                CONF_LLM_MODEL, default=defaults.get(CONF_LLM_MODEL, "")
-            ): selector.TextSelector(),
-            vol.Optional(
                 CONF_USDA_API_KEY, default=defaults.get(CONF_USDA_API_KEY, "")
             ): selector.TextSelector(
                 selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
@@ -222,6 +213,110 @@ def _hub_schema(defaults: dict[str, Any], hass: HomeAssistant | None = None) -> 
                 CONF_GLOBAL_BASELINE_NOTES,
                 default=defaults.get(CONF_GLOBAL_BASELINE_NOTES, ""),
             ): selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+        }
+    )
+
+
+def _llm_provider_details_schema(
+    provider: str,
+    defaults: dict[str, Any],
+    hass: HomeAssistant | None = None,
+    *,
+    previous_provider: str | None = None,
+) -> vol.Schema:
+    same_provider = (previous_provider or defaults.get(CONF_LLM_PROVIDER)) == provider
+    suggested_ai_task = _suggested_ai_task_entity(
+        defaults if same_provider else {}, hass
+    )
+    default_timeout = (
+        float(defaults[CONF_LLM_TIMEOUT_S])
+        if same_provider and defaults.get(CONF_LLM_TIMEOUT_S) not in (None, "")
+        else _default_timeout_for_provider(provider)
+    )
+    timeout_selector = selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=15.0,
+            max=600.0,
+            step=5.0,
+            unit_of_measurement="s",
+            mode=selector.NumberSelectorMode.BOX,
+        )
+    )
+
+    if provider == LLM_PROVIDER_HA_AI_TASK:
+        return vol.Schema(
+            {
+                vol.Optional(
+                    CONF_AI_TASK_ENTITY,
+                    description={"suggested_value": suggested_ai_task},
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="ai_task")
+                ),
+            }
+        )
+
+    default_model = (
+        str(defaults.get(CONF_LLM_MODEL) or "")
+        if same_provider and defaults.get(CONF_LLM_MODEL)
+        else DEFAULT_MODELS_BY_PROVIDER.get(provider, "")
+    )
+    default_base_url = (
+        str(defaults.get(CONF_LLM_BASE_URL) or "")
+        if same_provider and defaults.get(CONF_LLM_BASE_URL)
+        else DEFAULT_BASE_URLS_BY_PROVIDER.get(provider, "")
+    )
+
+    if provider == LLM_PROVIDER_OLLAMA:
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_LLM_BASE_URL, default=default_base_url
+                ): selector.TextSelector(),
+                vol.Required(
+                    CONF_LLM_MODEL, default=default_model
+                ): selector.TextSelector(),
+                vol.Required(
+                    CONF_LLM_TIMEOUT_S, default=default_timeout
+                ): timeout_selector,
+            }
+        )
+
+    if provider in (LLM_PROVIDER_OPENAI, LLM_PROVIDER_ANTHROPIC, LLM_PROVIDER_GEMINI):
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_LLM_API_KEY,
+                    default=defaults.get(CONF_LLM_API_KEY, "") if same_provider else "",
+                ): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
+                vol.Required(
+                    CONF_LLM_MODEL, default=default_model
+                ): selector.TextSelector(),
+                vol.Required(
+                    CONF_LLM_TIMEOUT_S, default=default_timeout
+                ): timeout_selector,
+            }
+        )
+
+    # openai_compatible
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_LLM_BASE_URL, default=default_base_url
+            ): selector.TextSelector(),
+            vol.Required(
+                CONF_LLM_MODEL, default=default_model
+            ): selector.TextSelector(),
+            vol.Optional(
+                CONF_LLM_API_KEY,
+                default=defaults.get(CONF_LLM_API_KEY, "") if same_provider else "",
+            ): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
+            vol.Required(
+                CONF_LLM_TIMEOUT_S, default=default_timeout
+            ): timeout_selector,
         }
     )
 
@@ -517,6 +612,23 @@ def _llm_override_schema(defaults: dict[str, Any], hass: HomeAssistant | None = 
             vol.Optional(
                 CONF_LLM_MODEL, default=defaults.get(CONF_LLM_MODEL, "")
             ): selector.TextSelector(),
+            vol.Optional(
+                CONF_LLM_TIMEOUT_S,
+                default=float(
+                    defaults.get(CONF_LLM_TIMEOUT_S)
+                    or _default_timeout_for_provider(
+                        str(defaults.get(CONF_LLM_PROVIDER, LLM_PROVIDER_NONE))
+                    )
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=15.0,
+                    max=600.0,
+                    step=5.0,
+                    unit_of_measurement="s",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
         }
     )
 
@@ -567,6 +679,7 @@ class CaloriesBuddyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
+        self._hub_draft: dict[str, Any] = {}
         self._person_data: dict[str, Any] = {}
 
     @staticmethod
@@ -588,22 +701,48 @@ class CaloriesBuddyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_hub(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Configure the singleton Household Hub (with LLM Disclosure Notice)."""
-        errors: dict[str, str] = {}
+        """Step 1: Language, LLM Provider selection, USDA key, and household notes."""
         if user_input is not None:
-            errors = await _validate_llm_input(self.hass, user_input)
-            if not errors:
+            provider = str(user_input.get(CONF_LLM_PROVIDER, LLM_PROVIDER_NONE))
+            self._hub_draft = dict(user_input)
+            if provider == LLM_PROVIDER_NONE:
                 await self.async_set_unique_id("hub")
                 self._abort_if_unique_id_configured()
-                data = {ENTRY_KIND: ENTRY_KIND_HUB, **user_input}
                 return self.async_create_entry(
-                    title="Calories Buddy — Household Hub", data=data
+                    title="Calories Buddy — Household Hub",
+                    data={ENTRY_KIND: ENTRY_KIND_HUB, **self._hub_draft},
                 )
+            return await self.async_step_hub_llm()
 
         return self.async_show_form(
             step_id="hub",
-            data_schema=_hub_schema(user_input or {}, self.hass),
+            data_schema=_hub_base_schema(self._hub_draft or {}),
+        )
+
+    async def async_step_hub_llm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 2: Configure only the fields required by the chosen LLM provider."""
+        provider = str(self._hub_draft.get(CONF_LLM_PROVIDER, LLM_PROVIDER_NONE))
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            combined = {**self._hub_draft, **user_input}
+            errors = await _validate_llm_input(self.hass, combined)
+            if not errors:
+                await self.async_set_unique_id("hub")
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title="Calories Buddy — Household Hub",
+                    data={ENTRY_KIND: ENTRY_KIND_HUB, **combined},
+                )
+
+        return self.async_show_form(
+            step_id="hub_llm",
+            data_schema=_llm_provider_details_schema(
+                provider, user_input or self._hub_draft, self.hass
+            ),
             errors=errors,
+            description_placeholders={"provider": provider},
         )
 
     async def async_step_person_identity(
@@ -753,6 +892,10 @@ class CaloriesBuddyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class CaloriesBuddyOptionsFlow(config_entries.OptionsFlow):
     """OptionsFlow supporting Hub settings and modular Person Profile editing."""
 
+    def __init__(self) -> None:
+        self._hub_draft: dict[str, Any] = {}
+        self._previous_provider: str | None = None
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -767,20 +910,49 @@ class CaloriesBuddyOptionsFlow(config_entries.OptionsFlow):
     async def async_step_hub_options(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Edit global Hub LLM, language, USDA key, and baseline notes."""
+        """Step 1: Edit global language, LLM provider, USDA key, and baseline notes."""
         current = merged_entry_config(self.config_entry)
-        errors: dict[str, str] = {}
         if user_input is not None:
-            errors = await _validate_llm_input(self.hass, user_input)
-            if not errors:
+            provider = str(user_input.get(CONF_LLM_PROVIDER, LLM_PROVIDER_NONE))
+            self._previous_provider = str(current.get(CONF_LLM_PROVIDER, LLM_PROVIDER_NONE))
+            self._hub_draft = {**current, **user_input}
+            if provider == LLM_PROVIDER_NONE:
                 return self.async_create_entry(
                     title="", data={**self.config_entry.options, **user_input}
                 )
+            return await self.async_step_hub_options_llm()
 
         return self.async_show_form(
             step_id="hub_options",
-            data_schema=_hub_schema(user_input or current, self.hass),
+            data_schema=_hub_base_schema(current),
+        )
+
+    async def async_step_hub_options_llm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 2: Configure only the fields required by the selected LLM provider."""
+        current = merged_entry_config(self.config_entry)
+        draft = self._hub_draft or current
+        provider = str(draft.get(CONF_LLM_PROVIDER, LLM_PROVIDER_NONE))
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            combined = {**draft, **user_input}
+            errors = await _validate_llm_input(self.hass, combined)
+            if not errors:
+                return self.async_create_entry(
+                    title="", data={**self.config_entry.options, **combined}
+                )
+
+        return self.async_show_form(
+            step_id="hub_options_llm",
+            data_schema=_llm_provider_details_schema(
+                provider,
+                user_input or draft,
+                self.hass,
+                previous_provider=self._previous_provider,
+            ),
             errors=errors,
+            description_placeholders={"provider": provider},
         )
 
     async def async_step_biometrics(

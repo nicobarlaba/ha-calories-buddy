@@ -1,6 +1,6 @@
 # HA Calories Buddy — User & Operator Manual
 
-**Version:** `0.2.1` (Phase 2 — *The Dietitian & Chef* + Fiber, Vault Pagination & HA AI Task)  
+**Version:** `0.2.2` (Phase 2 — *The Dietitian & Chef* + Fiber, Vault Pagination & HA AI Task)  
 **Minimum Home Assistant:** `2026.10.0` (verified on `2026.11.3` / Python `3.14`)  
 **Languages:** English (`en`) & Italian (`it`)
 
@@ -96,13 +96,13 @@
 
 | Provider Value | Endpoint / Auth | Suggested Default Model | Notes |
 | :--- | :--- | :--- | :--- |
-| `ha_ai_task` | Reuses an existing Home Assistant `ai_task.*` entity (e.g., `ai_task.google_ai_task`) | Managed in HA | **Recommended** if you already configured Google Generative AI, OpenAI, Anthropic, or Ollama in HA — zero duplicated API keys! |
+| `ha_ai_task` | Reuses an existing Home Assistant `ai_task.*` entity (e.g., `ai_task.google_ai_task_3_8`) | Managed in HA | **Recommended** if you already configured Google Generative AI, OpenAI, Anthropic, or Ollama in HA — zero duplicated API keys and no Ollama URL needed. Step 2 shows only the `ai_task.*` selector. |
 | `none` | No network / no API key | — | Manual search, paginated Food Vault, barcode logging, and deterministic rebalancing remain 100% active. |
-| `openai` | OpenAI API key (`https://api.openai.com/v1`) | `gpt-4o-mini` | Uses native JSON schema + automatic repair retry. |
-| `anthropic` | Anthropic API key (`https://api.anthropic.com`) | `claude-sonnet-4-5` | Uses forced structured tool output. |
-| `gemini` | Google AI Studio API key | `gemini-2.5-flash` | Uses sanitized `responseSchema` JSON mode. |
-| `ollama` | Local URL (default `http://localhost:11434`) | `qwen2.5:14b` | 100% local; set LAN IP if Ollama runs on another host (e.g. `http://192.168.0.50:11434`). |
-| `openai_compatible` | Custom Base URL (default `http://localhost:1234/v1`) + optional key | `local-model` | Works with **LM Studio**, OpenRouter, vLLM, Groq, and LocalAI. |
+| `openai` | OpenAI API key (`https://api.openai.com/v1`) | `gpt-4o-mini` | Uses native JSON schema + automatic repair retry (default timeout `60s`, configurable). |
+| `anthropic` | Anthropic API key (`https://api.anthropic.com`) | `claude-sonnet-4-5` | Uses forced structured tool output (default timeout `60s`, configurable). |
+| `gemini` | Google AI Studio API key | `gemini-2.5-flash` | Uses sanitized `responseSchema` JSON mode (default timeout `60s`, configurable). |
+| `ollama` | Local URL (default `http://localhost:11434`) | `qwen2.5:14b` | 100% local; default timeout is `180s` (configurable up to `600s` in Step 2) to accommodate full recipe/meal-plan generation. |
+| `openai_compatible` | Custom Base URL (default `http://localhost:1234/v1`) + optional key | `local-model` | Works with **LM Studio**, OpenRouter, vLLM, Groq, and LocalAI (default timeout `180s`). |
 
 > **Important:** The LLM **never** calculates final calories or sums macros. It extracts food names, brands, quantities, units, and raw/cooked states into a strict JSON schema; Python resolves nutrition deterministically from the Food Vault and structured databases.
 
@@ -151,7 +151,7 @@ Every night at `23:55` (and whenever you log weight manually), the coordinator p
 
 ## 7. Daily Usage: Custom Lovelace Card
 
-In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.1` is registered automatically on startup.
+In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.2` is registered automatically on startup.
 
 1. Refresh your browser (`Ctrl+Shift+R` / clear mobile app cache once).
 2. Edit a dashboard → **+ Add Card** → search **HA Calories Buddy** (or add YAML `type: custom:ha-calories-buddy-card`).
@@ -307,7 +307,7 @@ If your Home Assistant uses `lovelace: mode: yaml` instead of UI storage mode, a
 lovelace:
   mode: yaml
   resources:
-    - url: /ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.1
+    - url: /ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.2
       type: module
 ```
 
@@ -325,7 +325,7 @@ title: Calories Buddy
 ## 13. Troubleshooting & FAQ
 
 - **Custom Card shows "Custom element doesn't exist: ha-calories-buddy-card":**  
-  Hard-refresh your browser (`Ctrl+Shift+R`) or clear cache in the Home Assistant Companion app. Confirm under **Settings → Dashboards → Resources** that `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.1` is listed (if using YAML mode, follow [Section 12](#12-lovelace-yaml-mode-setup)).
+  Hard-refresh your browser (`Ctrl+Shift+R`) or clear cache in the Home Assistant Companion app. Confirm under **Settings → Dashboards → Resources** that `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.2` is listed (if using YAML mode, follow [Section 12](#12-lovelace-yaml-mode-setup)).
 - **Camera barcode scanner button is disabled:**  
   Live camera scanning requires HTTPS (or `localhost`) plus browser `BarcodeDetector` support (Chromium/Android WebView; iOS Safari lacks native `BarcodeDetector`). Type or paste the EAN digits directly into the manual lookup input—it works everywhere.
 - **Voice logging from a shared smart speaker returns an ambiguity error:**  

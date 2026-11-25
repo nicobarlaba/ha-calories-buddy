@@ -2,17 +2,24 @@
   "config": {
     "step": {
       "hub": {
-        "title": "Hub Familiare e Configurazione AI",
-        "description": "Configura l'Hub condiviso di HA Calories Buddy.\n\nAvviso su Capacità LLM e Privacy: la precisione del riconoscimento vocale/testuale e delle proposte menu dipende direttamente dalle capacità del modello scelto (modelli locali piccoli possono richiedere conferme più frequenti). I provider cloud (OpenAI, Anthropic, Gemini) comportano costi API e inviano il contesto alimentare all'esterno; i motori locali (Ollama, LM Studio) mantengono tutti i dati in casa. Seleziona 'Nessuno' per usare solo inserimento manuale e barcode offline.",
+        "title": "Hub Familiare — Lingua e Provider AI",
+        "description": "Configura l'Hub condiviso di HA Calories Buddy.\n\nScegli 'Home Assistant AI Task' per riutilizzare direttamente Google AI / OpenAI già configurati in HA (senza reinserire API key né URL di Ollama), oppure scegli Ollama o provider cloud dedicati. Nella schermata successiva ti verranno chiesti SOLO i parametri del provider scelto. Seleziona 'Nessuno' per usare solo log manuale e barcode.",
         "data": {
           "language": "Lingua Predefinita",
           "llm_provider": "Provider LLM Predefinito",
-          "ai_task_entity": "Entità AI Task di Home Assistant (per provider HA AI Task)",
-          "llm_api_key": "API Key (per provider cloud)",
-          "llm_base_url": "Base URL (Ollama / LM Studio / endpoint custom)",
-          "llm_model": "Nome Modello (es. gpt-4o-mini, gemini-2.5-flash, qwen2.5:14b)",
           "usda_api_key": "API Key USDA FoodData Central (opzionale)",
           "global_baseline_notes": "Note Gusti Base Famiglia (opzionale)"
+        }
+      },
+      "hub_llm": {
+        "title": "Parametri Provider ({provider})",
+        "description": "Inserisci solo i parametri richiesti per '{provider}'. Per modelli locali Ollama che generano piani o suggerimenti pasto, mantieni il timeout a 180s o più.",
+        "data": {
+          "ai_task_entity": "Entità AI Task di Home Assistant",
+          "llm_api_key": "API Key",
+          "llm_base_url": "Base URL",
+          "llm_model": "Nome Modello",
+          "llm_timeout_s": "Timeout Richiesta (secondi)"
         }
       },
       "person_identity": {
@@ -80,7 +87,8 @@
           "ai_task_entity": "Entità AI Task di Home Assistant (per provider HA AI Task)",
           "llm_api_key": "API Key",
           "llm_base_url": "Base URL",
-          "llm_model": "Nome Modello"
+          "llm_model": "Nome Modello",
+          "llm_timeout_s": "Timeout Richiesta (secondi)"
         }
       },
       "person_diet": {
@@ -117,17 +125,24 @@
         }
       },
       "hub_options": {
-        "title": "Impostazioni Hub Familiare",
-        "description": "Avviso Privacy LLM: i provider cloud inviano il contesto dei pasti all'esterno e hanno costi API; Ollama e LM Studio restano locali.",
+        "title": "Impostazioni Hub — Lingua e Provider AI",
+        "description": "Scegli il provider AI predefinito. Premendo Invia, il passaggio successivo mostrerà SOLO i campi necessari per quel provider (con 'HA AI Task' NON ti serviranno più URL o modello di Ollama).",
         "data": {
           "language": "Lingua Predefinita",
           "llm_provider": "Provider LLM Predefinito",
-          "ai_task_entity": "Entità AI Task di Home Assistant (per provider HA AI Task)",
+          "usda_api_key": "USDA API Key (opzionale)",
+          "global_baseline_notes": "Note Gusti Base Famiglia"
+        }
+      },
+      "hub_options_llm": {
+        "title": "Parametri Provider ({provider})",
+        "description": "Configura '{provider}'. Con Ollama locale su proposte pasto/piani complessi è consigliato un timeout >= 180s.",
+        "data": {
+          "ai_task_entity": "Entità AI Task di Home Assistant",
           "llm_api_key": "API Key",
           "llm_base_url": "Base URL",
           "llm_model": "Nome Modello",
-          "usda_api_key": "USDA API Key (opzionale)",
-          "global_baseline_notes": "Note Gusti Base Famiglia"
+          "llm_timeout_s": "Timeout Richiesta (secondi)"
         }
       },
       "biometrics": {
@@ -181,7 +196,8 @@
           "ai_task_entity": "Entità AI Task di Home Assistant",
           "llm_api_key": "API Key",
           "llm_base_url": "Base URL",
-          "llm_model": "Nome Modello"
+          "llm_model": "Nome Modello",
+          "llm_timeout_s": "Timeout Richiesta (secondi)"
         }
       },
       "diet": {

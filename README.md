@@ -91,7 +91,7 @@ flowchart LR
 | Phase | Scope | Status |
 | :--- | :--- | :--- |
 | **Phase 1 — MVP** | Multi-person Hub + Person ConfigFlow, SQLite two-tier Food Vault, Open Food Facts + Barcode scanner, EU/US Atwater & raw/cooked yield math, Cloud + Local LLMs, Assist `llm.API`, BMR/TDEE + Garmin/scale mapping, Sensors + Colored Calendar, Custom Card v1 (`en`/`it`). | **Completed (`v0.1.0`)** |
-| **Phase 2 — Dietitian & Chef** | Two-tier taste/brand preference learning + Zero-Trust Hard-Constraint Gate, HA `ai_task.*` LLM provider, full Fiber tracking (10 sensors), on-demand recipe proposals, deterministic `±5%` macro-scaled 1–7d meal plans (`meal_prep_mode`), swap/promote, intra-day & multi-day rebalancing, Paginated Vault, Macro Pie Chart, 7 Assist tools, 14 services, Custom Card v2 (`Today`, `Plan`, `Food Vault`, `Preferences`). | **Completed (`v0.2.1`)** |
+| **Phase 2 — Dietitian & Chef** | Two-tier taste/brand preference learning + Zero-Trust Hard-Constraint Gate, HA `ai_task.*` LLM provider (2-step provider-scoped Hub flow & configurable timeouts), full Fiber tracking (10 sensors), on-demand recipe proposals, deterministic `±5%` macro-scaled 1–7d meal plans (`meal_prep_mode`), swap/promote, intra-day & multi-day rebalancing, Paginated Vault, Macro Pie Chart, 7 Assist tools, 14 services, Custom Card v2 (`Today`, `Plan`, `Food Vault`, `Preferences`). | **Completed (`v0.2.2`)** |
 | **Phase 3 — Butler & Adaptive TDEE** | Editable weekly shopping draft synced to `todo.*`, MacroFactor-style Adaptive TDEE (EMA weight trend vs. intake), composite homemade recipes, Trends SVG charts. | Planned |
 
 ---
