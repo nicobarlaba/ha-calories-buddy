@@ -1,0 +1,176 @@
+log_meal_text:
+  name: Log Meal from Natural Text
+  description: Parse a natural language meal description via LLM and log calories and macros deterministically.
+  fields:
+    text:
+      name: Meal Description
+      description: Natural language utterance (e.g. "For lunch 80g basmati rice Scotti, 1 tbsp olive oil, 250g cooked lentils").
+      required: true
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      description: Person display name, person_id, or person.* entity ID. Defaults to calling HA user.
+      selector:
+        text:
+    meal_slot:
+      name: Meal Slot (optional)
+      selector:
+        text:
+    date:
+      name: Date (YYYY-MM-DD, optional)
+      selector:
+        text:
+
+log_meal_item:
+  name: Log Single Food Item
+  description: Log a specific food item deterministically without calling an LLM.
+  fields:
+    food_id:
+      name: Food ID
+      selector:
+        text:
+    barcode:
+      name: Barcode (EAN)
+      selector:
+        text:
+    name:
+      name: Food Name
+      selector:
+        text:
+    quantity:
+      name: Quantity
+      required: true
+      selector:
+        number:
+          min: 0.1
+          max: 5000
+          step: 0.5
+    unit:
+      name: Unit
+      default: g
+      selector:
+        text:
+    state:
+      name: Preparation State
+      default: unspecified
+      selector:
+        select:
+          options:
+            - raw
+            - cooked
+            - ready_to_eat
+            - unspecified
+    meal_slot:
+      name: Meal Slot
+      default: Snack
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+confirm_meal:
+  name: Confirm Pending Meal
+  description: Confirm a meal waiting in pending confirmation state.
+  fields:
+    log_id:
+      name: Meal Log ID
+      required: true
+      selector:
+        text:
+    promote_to_vault:
+      name: Save Estimated Foods to Vault
+      default: false
+      selector:
+        boolean:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+update_meal_item:
+  name: Update Meal Item
+  description: Adjust quantity, unit, or preparation state of a logged item.
+  fields:
+    log_id:
+      name: Meal Log ID
+      required: true
+      selector:
+        text:
+    item_id:
+      name: Meal Item ID
+      required: true
+      selector:
+        text:
+    quantity:
+      name: New Quantity
+      required: true
+      selector:
+        number:
+          min: 0.1
+          max: 5000
+          step: 0.5
+    unit:
+      name: New Unit (optional)
+      selector:
+        text:
+    state:
+      name: New State (optional)
+      selector:
+        select:
+          options:
+            - raw
+            - cooked
+            - ready_to_eat
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+delete_meal:
+  name: Delete Meal
+  description: Soft-delete a logged meal.
+  fields:
+    log_id:
+      name: Meal Log ID
+      required: true
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+lookup_barcode:
+  name: Lookup Food Barcode
+  description: Search local Food Vault and Open Food Facts by EAN/UPC barcode.
+  fields:
+    barcode:
+      name: Barcode (EAN/UPC)
+      required: true
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+log_weight:
+  name: Log Body Weight
+  description: Record today's body weight (kg) and update biometric snapshot.
+  fields:
+    weight_kg:
+      name: Weight (kg)
+      required: true
+      selector:
+        number:
+          min: 20
+          max: 350
+          step: 0.1
+          unit_of_measurement: kg
+    person:
+      name: Person (optional)
+      selector:
+        text:

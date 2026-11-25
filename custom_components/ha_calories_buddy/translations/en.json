@@ -1,0 +1,282 @@
+{
+  "config": {
+    "step": {
+      "hub": {
+        "title": "Household Hub & AI Configuration",
+        "description": "Configure the shared Household Hub for HA Calories Buddy.\n\nLLM Capability & Privacy Notice: Natural-language voice/text logging and AI meal suggestions depend directly on the chosen model's structured-output quality (smaller local models may require occasional confirmation). Cloud APIs (OpenAI, Anthropic, Gemini) incur provider costs and transmit meal/profile context externally; local engines (Ollama, LM Studio) keep all data on-premises. Select 'None' to use manual & barcode logging completely offline.",
+        "data": {
+          "language": "Default Language",
+          "llm_provider": "Default LLM Provider",
+          "llm_api_key": "API Key (for cloud providers)",
+          "llm_base_url": "Base URL (Ollama / LM Studio / custom endpoint)",
+          "llm_model": "Model Name (e.g. gpt-4o-mini, gemini-2.5-flash, qwen2.5:14b)",
+          "usda_api_key": "USDA FoodData Central API Key (optional)",
+          "global_baseline_notes": "Household Food Baseline Notes (optional)"
+        }
+      },
+      "person_identity": {
+        "title": "Person Identity & Home Assistant Mapping",
+        "description": "Each instance monitors one person. Link a Home Assistant person entity so voice and dashboard actions route automatically to the right profile.",
+        "data": {
+          "ha_person_entity": "Home Assistant Person Entity",
+          "display_name": "Display Name",
+          "ha_user_id": "Home Assistant User ID (auto-detected if linked)",
+          "language_override": "Language"
+        }
+      },
+      "person_biometrics": {
+        "title": "Biometrics, Goals & TDEE Engine",
+        "description": "Configure physiology parameters or switch to Manual / Nutritionist mode.",
+        "data": {
+          "sex": "Biological Sex",
+          "birth_year": "Birth Year",
+          "height_cm": "Height",
+          "initial_weight_kg": "Initial Weight",
+          "body_fat_pct": "Body Fat % (optional, enables Katch-McArdle)",
+          "target_mode": "Target Mode",
+          "goal_type": "Goal",
+          "weekly_rate_kg": "Weekly Weight Change Rate (+ gain / - loss)",
+          "tdee_engine": "TDEE Calculation Engine",
+          "activity_level": "Baseline Activity Level (PAL)",
+          "wearable_correction_factor": "Wearable Calorie Correction Factor (e.g. 0.85 - 1.0)"
+        }
+      },
+      "person_manual_targets": {
+        "title": "Manual / Nutritionist Macro Targets",
+        "description": "Set explicit daily targets (and optional Training Day overrides).",
+        "data": {
+          "manual_kcal": "Daily Calories (Rest / Default)",
+          "manual_protein_g": "Protein (Rest / Default)",
+          "manual_carbs_g": "Carbs (Rest / Default)",
+          "manual_fat_g": "Fat (Rest / Default)",
+          "manual_training_kcal": "Training Day Calories (optional)",
+          "manual_training_protein_g": "Training Day Protein (optional)",
+          "manual_training_carbs_g": "Training Day Carbs (optional)",
+          "manual_training_fat_g": "Training Day Fat (optional)"
+        }
+      },
+      "person_entities": {
+        "title": "Biophysical Sensors & Household Services",
+        "description": "Optionally map entities from Garmin Connect, smart scales, shopping lists, and notifications.",
+        "data": {
+          "weight_entity": "Body Weight Sensor",
+          "body_fat_entity": "Body Fat % Sensor",
+          "active_kcal_entity": "Active Calories Burned Sensor (e.g. Garmin)",
+          "total_kcal_entity": "Total Calories Burned Sensor (e.g. Garmin)",
+          "steps_entity": "Daily Steps Sensor",
+          "todo_entity": "Shopping List (todo.*)",
+          "notify_service": "Notification Service (e.g. notify.mobile_app_phone)"
+        }
+      },
+      "person_llm": {
+        "title": "Per-Person LLM Override (optional)",
+        "description": "By default this profile inherits the Household Hub LLM. Enable override to use a different provider or model for this person.",
+        "data": {
+          "llm_override_enabled": "Override Hub LLM for this person",
+          "llm_provider": "LLM Provider",
+          "llm_api_key": "API Key",
+          "llm_base_url": "Base URL",
+          "llm_model": "Model Name"
+        }
+      },
+      "person_diet": {
+        "title": "Meal Schedule & Dietary Constraints",
+        "description": "Specify meal slots and strict allergies/intolerances.",
+        "data": {
+          "meal_slots": "Meal Slots (comma-separated)",
+          "dietary_regime": "Dietary Pattern",
+          "allergies": "Allergies (comma-separated)",
+          "intolerances": "Intolerances (comma-separated)",
+          "blacklist": "Excluded / Disliked Foods (comma-separated)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the LLM endpoint. Check URL, model name, and API key.",
+      "api_key_required": "An API key is required for the selected cloud LLM provider.",
+      "model_required": "Please specify a model name.",
+      "name_required": "Display name is required (or pick a Home Assistant person entity)."
+    },
+    "abort": {
+      "already_configured": "This profile or hub is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Manage Person Profile",
+        "menu_options": {
+          "biometrics": "Biometrics & Calorie Targets",
+          "entities": "Mapped Sensors & Services",
+          "llm": "Per-Person LLM Override",
+          "diet": "Meal Slots & Dietary Constraints"
+        }
+      },
+      "hub_options": {
+        "title": "Household Hub Settings",
+        "description": "LLM Capability & Privacy Notice: Cloud APIs incur provider fees and send meal context externally; local Ollama / LM Studio endpoints remain on-premises.",
+        "data": {
+          "language": "Default Language",
+          "llm_provider": "Default LLM Provider",
+          "llm_api_key": "API Key",
+          "llm_base_url": "Base URL",
+          "llm_model": "Model Name",
+          "usda_api_key": "USDA API Key (optional)",
+          "global_baseline_notes": "Household Baseline Notes"
+        }
+      },
+      "biometrics": {
+        "title": "Biometrics & Calorie Targets",
+        "data": {
+          "sex": "Biological Sex",
+          "birth_year": "Birth Year",
+          "height_cm": "Height",
+          "initial_weight_kg": "Initial / Fallback Weight",
+          "body_fat_pct": "Body Fat %",
+          "target_mode": "Target Mode",
+          "goal_type": "Goal",
+          "weekly_rate_kg": "Weekly Weight Change Rate",
+          "tdee_engine": "TDEE Calculation Engine",
+          "activity_level": "Baseline Activity Level (PAL)",
+          "wearable_correction_factor": "Wearable Correction Factor"
+        }
+      },
+      "manual_targets": {
+        "title": "Manual / Nutritionist Targets",
+        "data": {
+          "manual_kcal": "Daily Calories",
+          "manual_protein_g": "Protein",
+          "manual_carbs_g": "Carbs",
+          "manual_fat_g": "Fat",
+          "manual_training_kcal": "Training Day Calories",
+          "manual_training_protein_g": "Training Day Protein",
+          "manual_training_carbs_g": "Training Day Carbs",
+          "manual_training_fat_g": "Training Day Fat"
+        }
+      },
+      "entities": {
+        "title": "Mapped Sensors & Services",
+        "data": {
+          "weight_entity": "Body Weight Sensor",
+          "body_fat_entity": "Body Fat % Sensor",
+          "active_kcal_entity": "Active Calories Sensor",
+          "total_kcal_entity": "Total Calories Sensor",
+          "steps_entity": "Daily Steps Sensor",
+          "todo_entity": "Shopping List (todo.*)",
+          "notify_service": "Notification Service"
+        }
+      },
+      "llm": {
+        "title": "Per-Person LLM Override",
+        "data": {
+          "llm_override_enabled": "Override Hub LLM",
+          "llm_provider": "LLM Provider",
+          "llm_api_key": "API Key",
+          "llm_base_url": "Base URL",
+          "llm_model": "Model Name"
+        }
+      },
+      "diet": {
+        "title": "Meal Slots & Dietary Constraints",
+        "data": {
+          "meal_slots": "Meal Slots (comma-separated)",
+          "dietary_regime": "Dietary Pattern",
+          "allergies": "Allergies",
+          "intolerances": "Intolerances",
+          "blacklist": "Excluded Foods"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the LLM endpoint.",
+      "api_key_required": "An API key is required for the selected cloud LLM provider.",
+      "model_required": "Please specify a model name."
+    }
+  },
+  "selector": {
+    "language": {
+      "options": {
+        "en": "English",
+        "it": "Italiano"
+      }
+    },
+    "language_override": {
+      "options": {
+        "inherit": "Inherit from Hub",
+        "en": "English",
+        "it": "Italiano"
+      }
+    },
+    "llm_provider": {
+      "options": {
+        "none": "None (Offline Manual & Barcode Only)",
+        "openai": "OpenAI",
+        "anthropic": "Anthropic (Claude)",
+        "gemini": "Google Gemini",
+        "ollama": "Ollama (Local)",
+        "openai_compatible": "OpenAI-Compatible (LM Studio / OpenRouter / vLLM)"
+      }
+    },
+    "sex": {
+      "options": {
+        "male": "Male",
+        "female": "Female"
+      }
+    },
+    "target_mode": {
+      "options": {
+        "physiology": "Physiology-Guided (BMR/TDEE)",
+        "manual": "Manual / Nutritionist Plan"
+      }
+    },
+    "goal_type": {
+      "options": {
+        "lose_weight": "Lose Weight",
+        "maintain": "Maintain Weight",
+        "recomposition": "Body Recomposition",
+        "gain_muscle": "Lean Muscle Gain"
+      }
+    },
+    "tdee_engine": {
+      "options": {
+        "static": "Static Profile (BMR x PAL)",
+        "wearable_dynamic": "Wearable-Dynamic (7-day rolling baseline)"
+      }
+    },
+    "activity_level": {
+      "options": {
+        "sedentary": "Sedentary (1.2)",
+        "light": "Lightly Active (1.375)",
+        "moderate": "Moderately Active (1.55)",
+        "very_active": "Very Active (1.725)",
+        "athlete": "Athlete (1.9)"
+      }
+    },
+    "dietary_regime": {
+      "options": {
+        "omnivore": "Omnivore",
+        "mediterranean": "Mediterranean",
+        "vegetarian": "Vegetarian",
+        "vegan": "Vegan",
+        "pescatarian": "Pescatarian",
+        "keto": "Ketogenic"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "calories_consumed": { "name": "Calories Consumed" },
+      "calories_target": { "name": "Calories Target" },
+      "calories_remaining": { "name": "Calories Remaining" },
+      "protein_consumed": { "name": "Protein Consumed" },
+      "carbs_consumed": { "name": "Carbs Consumed" },
+      "fat_consumed": { "name": "Fat Consumed" },
+      "tdee": { "name": "Estimated TDEE" },
+      "pending_confirmations": { "name": "Pending Meal Confirmations" },
+      "daily_adherence_pct": { "name": "Calorie Target Adherence" }
+    },
+    "calendar": {
+      "nutrition": { "name": "Nutrition Diary & Plan" }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["custom_components", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components.ha_calories_buddy"]
+
+[tool.mypy]
+python_version = "3.14"
+explicit_package_bases = true
+mypy_path = "."
+strict = true
+warn_unused_configs = true
+warn_return_any = true
+disallow_untyped_defs = true
+packages = ["custom_components.ha_calories_buddy.core"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["aiosqlite", "aiosqlite.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"

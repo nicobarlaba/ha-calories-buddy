@@ -1,0 +1,14 @@
+{
+  "domain": "ha_calories_buddy",
+  "name": "HA Calories Buddy",
+  "codeowners": ["@nicobarlaba"],
+  "config_flow": true,
+  "dependencies": ["http", "person"],
+  "after_dependencies": ["frontend", "lovelace", "conversation"],
+  "documentation": "https://github.com/nicobarlaba/ha-calories-buddy",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/nicobarlaba/ha-calories-buddy/issues",
+  "requirements": ["pydantic>=2.7,<3", "aiosqlite>=0.20"],
+  "version": "0.1.0"
+}
