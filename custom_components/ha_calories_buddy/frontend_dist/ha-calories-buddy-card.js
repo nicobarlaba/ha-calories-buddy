@@ -1,4 +1,4 @@
-/** HA Calories Buddy Custom Lovelace Card v0.2.3 (Zero-Build Modular ES Web Component) */
+/** HA Calories Buddy Custom Lovelace Card v0.2.4 (Zero-Build Modular ES Web Component) */
 import { CaloriesBuddyApi } from "./api.js";
 import { openBarcodeScannerModal } from "./components/barcode-scanner.js";
 import { t } from "./i18n/index.js";
@@ -52,6 +52,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
       error: null,
       toastLogId: null,
       editingItemId: null,
+      editReplacementFood: null,
       selectedAiSlot: null,
       macroPieMode: null,
     };
@@ -462,12 +463,42 @@ class HaCaloriesBuddyCard extends HTMLElement {
           }),
         onStartEditItem: (itemId) => {
           this._uiState.editingItemId = itemId;
+          this._uiState.editReplacementFood = null;
           this._render();
         },
-        onUpdateMealItem: (logId, itemId, qty, unit, state) =>
+        onSelectEditFood: (food) => {
+          this._uiState.editReplacementFood = food || null;
+          this._render();
+        },
+        onUpdateMealItem: (logId, itemId, qty, unit, state, foodId = null) =>
           this._withBusy(async () => {
-            await this._api.updateMealItem(this._activePersonId, logId, itemId, qty, unit, state);
+            await this._api.updateMealItem(
+              this._activePersonId,
+              logId,
+              itemId,
+              qty,
+              unit,
+              state,
+              foodId
+            );
             this._uiState.editingItemId = null;
+            this._uiState.editReplacementFood = null;
+            await this._loadDashboard();
+          }),
+        onDeleteMealItem: (logId, itemId) =>
+          this._withBusy(async () => {
+            const resp = await this._api.deleteMealItem(
+              this._activePersonId,
+              logId,
+              itemId
+            );
+            if (this._uiState.editingItemId === itemId) {
+              this._uiState.editingItemId = null;
+              this._uiState.editReplacementFood = null;
+            }
+            if (resp?.meal_deleted) {
+              this._uiState.toastLogId = logId;
+            }
             await this._loadDashboard();
           }),
         onPromotePlanMeal: (planItemId, scale) =>

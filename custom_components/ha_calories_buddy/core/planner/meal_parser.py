@@ -308,6 +308,26 @@ class MealLoggingService:
 
         return await self._meal_repo.confirm_meal(profile.person_id, log_id)
 
+    async def remove_meal_item(
+        self,
+        profile: PersonProfile,
+        log_id: str,
+        item_id: str,
+    ) -> MealLog | None:
+        """Delete one item from a logged meal and recalculate (or soft-delete parent)."""
+        updated = await self._meal_repo.delete_meal_item(
+            profile.person_id, log_id, item_id
+        )
+        if updated is not None:
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "meal_item_removed",
+                person_id=profile.person_id,
+                meal_deleted=(updated.status == MealStatus.DELETED),
+            )
+        return updated
+
     async def update_item_measurement(
         self,
         profile: PersonProfile,
@@ -317,8 +337,9 @@ class MealLoggingService:
         quantity: float,
         unit: str | None = None,
         state: PreparationState | None = None,
+        food_id: str | None = None,
     ) -> MealLog | None:
-        """Update quantity/unit/state of an existing item and recompute macros."""
+        """Update quantity/unit/state or swap the Vault food of an item and recompute macros."""
         meal = await self._meal_repo.get_meal_log(log_id)
         if meal is None or meal.person_id != profile.person_id:
             return None
@@ -328,12 +349,18 @@ class MealLoggingService:
             return None
 
         new_unit = unit or target_item.input_unit
-        new_state = state or target_item.input_state
+        target_food_id = food_id or target_item.food_id
+        if food_id is not None:
+            new_state = state if state is not None else PreparationState.UNSPECIFIED
+        else:
+            new_state = state or target_item.input_state
 
-        if target_item.food_id:
+        if target_food_id:
             food = await self._food_repo.get_effective_food(
-                target_item.food_id, person_id=profile.person_id
+                target_food_id, person_id=profile.person_id
             )
+            if food_id is not None and food is None:
+                return None
             if food is not None:
                 grams, unknown_unit = convert_to_grams(quantity, new_unit, food)
                 eff_state = (
@@ -349,6 +376,14 @@ class MealLoggingService:
                     profile.person_id,
                     log_id,
                     item_id,
+                    food_id=food.food_id if food_id is not None else None,
+                    display_name=(
+                        food.localized_name(profile.language)
+                        if food_id is not None
+                        else None
+                    ),
+                    brand=food.brand,
+                    update_brand=(food_id is not None),
                     input_quantity=quantity,
                     input_unit=new_unit,
                     input_state=eff_state,
@@ -359,6 +394,11 @@ class MealLoggingService:
                     ),
                     warning_code=(
                         WarningCode.UNKNOWN_UNIT if unknown_unit else None
+                    ),
+                    warning_detail=(
+                        f"Unknown unit '{new_unit}' defaulted to 100g"
+                        if unknown_unit
+                        else None
                     ),
                 )
 

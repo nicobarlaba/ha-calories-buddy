@@ -15,7 +15,10 @@ from custom_components.ha_calories_buddy.core.models import (
     LabelStandard,
     Macros,
     ManualMacroTarget,
+    MealLog,
+    MealLogItem,
     MealSlotConfig,
+    MealStatus,
     PersonProfile,
     PreparationState,
     Sex,
@@ -33,6 +36,7 @@ from custom_components.ha_calories_buddy.core.planner.meal_parser import (
     MealLoggingService,
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    canonical_slot_group,
     default_slot_for_time,
     default_slots_for_language,
     parse_hhmm_minutes,
@@ -339,3 +343,142 @@ async def test_database_migrations_idempotent_with_preexisting_column(
         assert row is not None
     finally:
         await db2.close()
+
+
+async def test_item_replacement_and_single_item_deletion_and_evening_slots(
+    seeded_db: Database,
+) -> None:
+    """Verify Vault food replacement (with brand clear), single-item delete, and evening snack slot."""
+    assert canonical_slot_group("Spuntino serale") == "snack"
+    assert canonical_slot_group("Dopocena") == "snack"
+    assert canonical_slot_group("Colazione") == "breakfast"
+    assert canonical_slot_group("Cena") == "dinner"
+    evening = MealSlotConfig(slot_id="s_eve", name="Spuntino serale", approx_time="12:30")
+    assert slot_approx_minutes(evening) == 22 * 60
+
+    food_repo = FoodRepository(seeded_db)
+    resolver = FoodResolver(food_repo)
+    meal_repo = MealRepository(seeded_db)
+    profile_repo = ProfileRepository(seeded_db)
+
+    profile = _make_profile(lang="it")
+    await profile_repo.upsert_person(profile)
+
+    # Create two same-brand breads + one unbranded generic food
+    await food_repo.upsert_global_food(
+        FoodItem(
+            food_id="f_bread_whole",
+            name="Wholemeal Bread BrandX",
+            name_it="Pane Integrale",
+            normalized_name="pane integrale",
+            brand="BrandX",
+            category="bread",
+            preparation_state=PreparationState.READY_TO_EAT,
+            macros_per_100g=Macros(kcal=240, protein_g=9.0, carbs_g=44.0, fat_g=2.5, fiber_g=6.0),
+            label_standard=LabelStandard.EU,
+            yield_factor=1.0,
+            source=FoodSource.MANUAL,
+            verified=True,
+        )
+    )
+    await food_repo.upsert_global_food(
+        FoodItem(
+            food_id="f_bread_rye",
+            name="Rye Bread BrandX",
+            name_it="Pane di Segale",
+            normalized_name="pane di segale",
+            brand="BrandX",
+            category="bread",
+            preparation_state=PreparationState.READY_TO_EAT,
+            macros_per_100g=Macros(kcal=210, protein_g=7.0, carbs_g=40.0, fat_g=1.5, fiber_g=8.5),
+            label_standard=LabelStandard.EU,
+            yield_factor=1.0,
+            source=FoodSource.MANUAL,
+            verified=True,
+        )
+    )
+
+    today = date.today()
+    meal = MealLog(
+        log_id="log_edit_test",
+        person_id=profile.person_id,
+        log_date=today,
+        meal_slot="Pranzo",
+        status=MealStatus.CONFIRMED,
+        total_macros=Macros(kcal=343, protein_g=19.3, carbs_g=47.6, fat_g=2.7, fiber_g=6.0),
+        items=[
+            MealLogItem(
+                item_id="item_bread",
+                log_id="log_edit_test",
+                food_id="f_bread_whole",
+                display_name="Pane Integrale",
+                brand="BrandX",
+                input_quantity=100,
+                input_unit="g",
+                input_state=PreparationState.READY_TO_EAT,
+                resolved_grams_ref=100,
+                macros=Macros(kcal=240, protein_g=9.0, carbs_g=44.0, fat_g=2.5, fiber_g=6.0),
+            ),
+            MealLogItem(
+                item_id="item_yog",
+                log_id="log_edit_test",
+                food_id="seed_greek_yogurt_0",
+                display_name="Yogurt Greco 0% Grassi",
+                input_quantity=180,
+                input_unit="g",
+                input_state=PreparationState.READY_TO_EAT,
+                resolved_grams_ref=180,
+                macros=Macros(kcal=102.6, protein_g=18.5, carbs_g=6.5, fat_g=0.4, fiber_g=0.0),
+            ),
+        ],
+    )
+    await meal_repo.create_meal_log(meal)
+
+    logging_svc = MealLoggingService(meal_repo, food_repo, resolver, lambda _p: None)
+
+    # 1. Replace branded Wholemeal Bread with branded Rye Bread
+    swapped = await logging_svc.update_item_measurement(
+        profile,
+        "log_edit_test",
+        "item_bread",
+        quantity=100,
+        unit="g",
+        food_id="f_bread_rye",
+    )
+    assert swapped is not None
+    bread_item = next(i for i in swapped.items if i.item_id == "item_bread")
+    assert bread_item.food_id == "f_bread_rye"
+    assert bread_item.display_name == "Pane di Segale"
+    assert bread_item.brand == "BrandX"
+    assert bread_item.macros.kcal == pytest.approx(210.0, abs=0.5)
+    assert bread_item.macros.fiber_g == pytest.approx(8.5, abs=0.2)
+
+    # 2. Swap to an unbranded generic seed item clears old BrandX cleanly
+    swapped_unbranded = await logging_svc.update_item_measurement(
+        profile,
+        "log_edit_test",
+        "item_bread",
+        quantity=100,
+        unit="g",
+        food_id="seed_wholewheat_bread",
+    )
+    assert swapped_unbranded is not None
+    bread_generic = next(i for i in swapped_unbranded.items if i.item_id == "item_bread")
+    assert bread_generic.food_id == "seed_wholewheat_bread"
+    assert bread_generic.brand is None
+
+    # 3. Remove 1 of 2 items -> remaining item stays confirmed and parent totals recalculate
+    after_remove_one = await logging_svc.remove_meal_item(profile, "log_edit_test", "item_yog")
+    assert after_remove_one is not None
+    assert after_remove_one.status == MealStatus.CONFIRMED
+    assert len(after_remove_one.items) == 1
+    assert after_remove_one.total_macros.kcal == pytest.approx(243.0, abs=1.0)
+
+    # 4. Remove last item -> parent soft-deletes cleanly and disappears from daily totals
+    after_remove_last = await logging_svc.remove_meal_item(profile, "log_edit_test", "item_bread")
+    assert after_remove_last is not None
+    assert after_remove_last.status == MealStatus.DELETED
+    assert after_remove_last.items == []
+    totals = await meal_repo.get_daily_totals(profile.person_id, today)
+    assert totals.consumed.kcal == 0.0
+    assert totals.confirmed_count == 0

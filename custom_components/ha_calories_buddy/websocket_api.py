@@ -23,6 +23,7 @@ from custom_components.ha_calories_buddy.core.models import (
     LabelStandard,
     Macros,
     MealFeedbackRating,
+    MealStatus,
     MealSuggestion,
     PersonFoodOverride,
     PersonProfile,
@@ -278,6 +279,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             vol.Required("quantity"): vol.Coerce(float),
             vol.Optional("unit"): str,
             vol.Optional("state"): str,
+            vol.Optional("food_id"): vol.Any(str, None),
             vol.Optional("person_id"): str,
         }
     )
@@ -299,6 +301,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             quantity=float(msg["quantity"]),
             unit=msg.get("unit"),
             state=state,
+            food_id=msg.get("food_id") or None,
         )
         if meal is None:
             connection.send_error(msg["id"], "not_found", "Meal item not found")
@@ -307,6 +310,41 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             profile.person_id, "ws_update_meal_item"
         )
         connection.send_result(msg["id"], {"meal_log": meal.model_dump(mode="json")})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/delete_meal_item",
+            vol.Required("log_id"): str,
+            vol.Required("item_id"): str,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_delete_meal_item(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        meal = await runtime.logging_service.remove_meal_item(
+            profile, msg["log_id"], msg["item_id"]
+        )
+        if meal is None:
+            connection.send_error(msg["id"], "not_found", "Meal item not found")
+            return
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_delete_meal_item"
+        )
+        connection.send_result(
+            msg["id"],
+            {
+                "meal_log": meal.model_dump(mode="json"),
+                "meal_deleted": meal.status == MealStatus.DELETED,
+            },
+        )
 
     @websocket_command(
         {
@@ -1028,6 +1066,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         ws_log_item,
         ws_confirm_meal,
         ws_update_meal_item,
+        ws_delete_meal_item,
         ws_update_meal_slot,
         ws_delete_meal,
         ws_restore_meal,

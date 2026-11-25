@@ -123,6 +123,29 @@ update_meal_item:
             - raw
             - cooked
             - ready_to_eat
+    food_id:
+      name: Replacement Food ID (optional)
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+delete_meal_item:
+  name: Remove Meal Item
+  description: Remove a single ingredient from a logged meal and recalculate totals (or delete parent meal if empty).
+  fields:
+    log_id:
+      name: Meal Log ID
+      required: true
+      selector:
+        text:
+    item_id:
+      name: Meal Item ID
+      required: true
+      selector:
+        text:
     person:
       name: Person (optional)
       selector:

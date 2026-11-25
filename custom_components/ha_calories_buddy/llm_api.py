@@ -15,6 +15,7 @@ from homeassistant.util.json import JsonValueType
 from custom_components.ha_calories_buddy.const import DOMAIN
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
+    MealStatus,
     PlanGenerationOptions,
     PlanItemStatus,
     PreparationState,
@@ -118,13 +119,14 @@ class LogMealTool(llm.Tool):
 
 
 class CorrectLastMealTool(llm.Tool):
-    """Assist tool to adjust quantity/unit/state or meal_slot of a meal logged today."""
+    """Assist tool to adjust, replace, remove items, or move meal_slot of a meal logged today."""
 
     name = "correct_last_meal"
     title = "Correct logged meal item or slot"
     description = (
-        "Adjust the quantity, unit, raw/cooked state of a food item logged today, "
-        "and/or change the meal_slot (e.g. move to Lunch/Pranzo)."
+        "Adjust quantity/unit/raw-cooked state of a food item logged today, "
+        "swap a wrongly recognized ingredient with another food in the Vault (`replacement_food_name`), "
+        "remove an unwanted extra ingredient (`remove_item: true`), and/or change the `meal_slot`."
     )
     integration = DOMAIN
     parameters = vol.Schema(
@@ -133,6 +135,9 @@ class CorrectLastMealTool(llm.Tool):
             vol.Optional("new_quantity"): vol.Coerce(float),
             vol.Optional("new_unit"): str,
             vol.Optional("new_state"): str,
+            vol.Optional("replacement_food_name"): str,
+            vol.Optional("replacement_brand"): str,
+            vol.Optional("remove_item", default=False): bool,
             vol.Optional("new_meal_slot"): str,
             vol.Optional("person"): str,
         }
@@ -144,7 +149,7 @@ class CorrectLastMealTool(llm.Tool):
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
     ) -> llm.ToolResult:
-        """Update item measurement and/or meal_slot on today's latest matching meal."""
+        """Update, swap, or remove an item and/or update meal_slot on today's meal."""
         runtime: DomainRuntime = hass.data[DOMAIN]
         args = tool_input.tool_args
         try:
@@ -164,6 +169,7 @@ class CorrectLastMealTool(llm.Tool):
         needle = str(args.get("item_name") or "").strip().lower()
         target_log_id: str | None = None
         target_item_id: str | None = None
+        current_qty = 0.0
 
         if needle:
             for meal in reversed(meals):
@@ -171,6 +177,7 @@ class CorrectLastMealTool(llm.Tool):
                     if needle in item.display_name.lower():
                         target_log_id = meal.log_id
                         target_item_id = item.item_id
+                        current_qty = item.input_quantity
                         break
                 if target_item_id is not None:
                     break
@@ -180,10 +187,86 @@ class CorrectLastMealTool(llm.Tool):
                     error=True,
                 )
         else:
-            target_log_id = meals[-1].log_id
+            latest_meal = meals[-1]
+            target_log_id = latest_meal.log_id
+            if len(latest_meal.items) == 1:
+                target_item_id = latest_meal.items[0].item_id
+                current_qty = latest_meal.items[0].input_quantity
+
+        remove_requested = bool(args.get("remove_item")) or (
+            args.get("new_quantity") is not None and float(args["new_quantity"]) <= 0
+        )
+        if remove_requested:
+            if target_item_id is None:
+                return llm.ToolResult(
+                    data={"error": "Specify item_name to remove a specific ingredient"},
+                    error=True,
+                )
+            removed_meal = await runtime.logging_service.remove_meal_item(
+                profile, target_log_id, target_item_id
+            )
+            if removed_meal is None:
+                return llm.ToolResult(
+                    data={"error": "Failed to remove item from meal"},
+                    error=True,
+                )
+            await runtime.async_notify_person_updated(
+                profile.person_id, "assist_correct_meal"
+            )
+            return llm.ToolResult(
+                data={
+                    "person": profile.display_name,
+                    "meal_slot": removed_meal.meal_slot,
+                    "removed": True,
+                    "meal_deleted": removed_meal.status == MealStatus.DELETED,
+                    "new_meal_kcal": removed_meal.total_macros.kcal,
+                    "protein_g": removed_meal.total_macros.protein_g,
+                    "carbs_g": removed_meal.total_macros.carbs_g,
+                    "fat_g": removed_meal.total_macros.fat_g,
+                    "fiber_g": round(removed_meal.total_macros.fiber_g or 0.0, 1),
+                }
+            )
 
         updated = None
-        if target_item_id is not None and args.get("new_quantity") is not None:
+        replacement_name = str(args.get("replacement_food_name") or "").strip()
+        if replacement_name:
+            if target_item_id is None:
+                return llm.ToolResult(
+                    data={"error": "Specify item_name to replace a specific ingredient"},
+                    error=True,
+                )
+            replacement = await runtime.resolver.resolve_food_candidate(
+                person_id=profile.person_id,
+                name=replacement_name,
+                brand=args.get("replacement_brand"),
+                language=profile.language,
+                llm_estimator=None,
+            )
+            if replacement is None:
+                return llm.ToolResult(
+                    data={"error": f"Food '{replacement_name}' not found in Food Vault"},
+                    error=True,
+                )
+            state = (
+                PreparationState(args["new_state"])
+                if args.get("new_state") in ("raw", "cooked", "ready_to_eat")
+                else None
+            )
+            qty_to_use = (
+                float(args["new_quantity"])
+                if args.get("new_quantity") is not None
+                else max(1.0, current_qty)
+            )
+            updated = await runtime.logging_service.update_item_measurement(
+                profile,
+                target_log_id,
+                target_item_id,
+                quantity=qty_to_use,
+                unit=args.get("new_unit"),
+                state=state,
+                food_id=replacement.food_id,
+            )
+        elif target_item_id is not None and args.get("new_quantity") is not None:
             state = (
                 PreparationState(args["new_state"])
                 if args.get("new_state") in ("raw", "cooked", "ready_to_eat")
@@ -207,7 +290,12 @@ class CorrectLastMealTool(llm.Tool):
 
         if updated is None:
             return llm.ToolResult(
-                data={"error": "Specify new_quantity or new_meal_slot to update"},
+                data={
+                    "error": (
+                        "Specify new_quantity, replacement_food_name, remove_item, "
+                        "or new_meal_slot to update"
+                    )
+                },
                 error=True,
             )
 

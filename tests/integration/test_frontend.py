@@ -27,6 +27,7 @@ def test_frontend_bundle_files_and_exports_exist() -> None:
         "i18n/en.js",
         "i18n/it.js",
         "components/quick-log-bar.js",
+        "components/barcode-decoder.js",
         "components/barcode-scanner.js",
         "views/today-view.js",
         "views/vault-view.js",
@@ -43,6 +44,12 @@ def test_frontend_bundle_files_and_exports_exist() -> None:
     assert "ha-calories-buddy-card" in entry_js
     assert "ha-calories-buddy-card-editor" in entry_js
     assert "window.customCards" in entry_js
+
+    decoder_js = (Path(FRONTEND_DIR) / "components/barcode-decoder.js").read_text(
+        encoding="utf-8"
+    )
+    assert "export async function decodeBarcodeFromImageSource" in decoder_js
+    assert "export function validateEanCheckDigit" in decoder_js
 
 
 async def test_async_register_frontend_registers_static_and_lovelace_resource(

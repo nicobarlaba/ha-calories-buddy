@@ -34,8 +34,17 @@ _CANONICAL_GROUPS: dict[str, tuple[str, ...]] = {
     "snack": (
         "snack",
         "spuntino",
+        "spuntino serale",
+        "spuntino notturno",
+        "dopocena",
+        "dopo cena",
         "merenda",
         "afternoon snack",
+        "evening snack",
+        "night snack",
+        "late snack",
+        "bedtime snack",
+        "after dinner",
         "spuntino pomeridiano",
         "pre workout",
         "post workout",
@@ -49,6 +58,18 @@ _SYNONYM_TO_GROUP: dict[str, str] = {
     for alias in aliases
 }
 
+_EVENING_SNACK_PHRASES = (
+    "serale",
+    "notturno",
+    "dopocena",
+    "dopo cena",
+    "evening snack",
+    "night snack",
+    "late snack",
+    "bedtime",
+    "after dinner",
+)
+
 _DEFAULT_SLOT_TIMES: dict[str, int] = {
     "breakfast": 8 * 60,
     "morning_snack": 10 * 60 + 30,
@@ -56,6 +77,22 @@ _DEFAULT_SLOT_TIMES: dict[str, int] = {
     "snack": 16 * 60 + 30,
     "dinner": 20 * 60,
 }
+
+
+def canonical_slot_group(slot_name: str) -> str:
+    """Resolve any meal slot name to a canonical culinary slot group."""
+    norm = normalize_text(slot_name)
+    if not norm:
+        return "other"
+    exact = _SYNONYM_TO_GROUP.get(norm)
+    if exact is not None:
+        return exact
+    for alias, group in sorted(
+        _SYNONYM_TO_GROUP.items(), key=lambda pair: len(pair[0]), reverse=True
+    ):
+        if alias and alias in norm:
+            return group
+    return "other"
 
 
 def parse_hhmm_minutes(hhmm: str | None) -> int | None:
@@ -97,8 +134,11 @@ def slot_approx_minutes(slot: MealSlotConfig) -> int:
     parsed = parse_hhmm_minutes(slot.approx_time)
     if parsed is not None and slot.approx_time != "12:30":
         return parsed
-    group = _SYNONYM_TO_GROUP.get(normalize_text(slot.name))
-    if group is not None and group in _DEFAULT_SLOT_TIMES:
+    norm_name = normalize_text(slot.name)
+    if any(phrase in norm_name for phrase in _EVENING_SNACK_PHRASES):
+        return 22 * 60
+    group = canonical_slot_group(slot.name)
+    if group in _DEFAULT_SLOT_TIMES:
         return _DEFAULT_SLOT_TIMES[group]
     return parsed if parsed is not None else 13 * 60
 

@@ -1,4 +1,4 @@
-/** English localization strings for ha-calories-buddy-card v0.2.3 */
+/** English localization strings for ha-calories-buddy-card v0.2.4 */
 export const EN = {
   title: "Calories Buddy",
   refresh_btn: "Refresh",
@@ -28,6 +28,9 @@ export const EN = {
   confirm_btn: "Confirm",
   confirm_promote_btn: "Confirm & Save Food",
   edit_btn: "Edit",
+  remove_item_btn: "Remove",
+  replace_food_placeholder: "Replace with Vault food...",
+  replaced_badge: "Replaced",
   save_btn: "Save",
   cancel_btn: "Cancel",
   delete_btn: "Delete",
@@ -54,7 +57,10 @@ export const EN = {
   barcode_modal_title: "Barcode Scanner & Lookup",
   start_camera_btn: "Start Camera",
   stop_camera_btn: "Stop Camera",
-  camera_https_hint: "Live camera scanning requires HTTPS or localhost, or BarcodeDetector support. You can always type or paste an EAN code below.",
+  photo_barcode_btn: "Photo Barcode",
+  decoding_photo: "Analyzing barcode photo...",
+  photo_barcode_not_found: "No readable EAN barcode found in photo. Try a sharper close-up or type digits manually.",
+  camera_https_hint: "Live camera preview requires HTTPS or localhost. Use 'Photo Barcode' above (works on HTTP & iOS/Android) or type the EAN digits manually.",
   ean_placeholder: "Enter EAN / UPC barcode...",
   lookup_btn: "Lookup",
   product_not_found: "No product found for this barcode. You can add it manually below.",

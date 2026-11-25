@@ -1,7 +1,13 @@
 /** Today View: Calorie ring, macro bars, SVG macro distribution pie chart, planned today, meal diary */
 import { renderQuickLogBar } from "../components/quick-log-bar.js";
 import { t } from "../i18n/index.js";
-import { computeMacroPieSlices, escapeHtml, parseJsonSafe, round1 } from "../utils.js";
+import {
+  computeMacroPieSlices,
+  escapeHtml,
+  localizedFoodName,
+  parseJsonSafe,
+  round1,
+} from "../utils.js";
 
 function renderMacroPieSvg(pieData) {
   const r = 34;
@@ -100,20 +106,41 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
           ? `<span class="pill warn">⚠️ ${escapeHtml(t(lang, `warn_${item.warning_code}`) || item.warning_code)}</span>`
           : "";
         if (isEditing) {
+          const repFood = uiState.editReplacementFood || null;
+          const activeName = repFood ? localizedFoodName(repFood, lang) : item.display_name;
+          const activeBrand = repFood ? repFood.brand : item.brand;
+          const activeState = repFood && ["raw", "cooked", "ready_to_eat"].includes(repFood.preparation_state)
+            ? repFood.preparation_state
+            : item.input_state;
           return `
             <div class="meal-item-row">
-              <div style="flex: 1; min-width: 180px;">
-                <strong>${escapeHtml(item.display_name)}</strong>
+              <div style="flex: 1; min-width: 210px;">
+                <div class="controls-row">
+                  <strong>${escapeHtml(activeName)}</strong>
+                  ${activeBrand ? `<span class="pill">${escapeHtml(activeBrand)}</span>` : ""}
+                  ${
+                    repFood
+                      ? `<span class="pill good">${escapeHtml(t(lang, "replaced_badge"))}</span>
+                         <button type="button" class="chip-btn" id="clear-rep-food-btn">✕</button>`
+                      : ""
+                  }
+                </div>
+                <div class="quick-input-row" style="margin-top: 6px;">
+                  <input type="text" id="edit-food-search-${escapeHtml(item.item_id)}" placeholder="${escapeHtml(t(lang, "replace_food_placeholder"))}" />
+                  <button type="button" class="secondary edit-food-search-btn" data-item-id="${escapeHtml(item.item_id)}">🔍</button>
+                </div>
+                <div id="edit-food-results-${escapeHtml(item.item_id)}" class="edit-food-results"></div>
                 <div class="controls-row" style="margin-top: 6px;">
                   <input type="number" step="0.5" min="0.1" id="edit-qty-${escapeHtml(item.item_id)}" value="${item.input_quantity}" style="width: 75px;" />
                   <input type="text" id="edit-unit-${escapeHtml(item.item_id)}" value="${escapeHtml(item.input_unit)}" style="width: 70px;" />
                   <select id="edit-state-${escapeHtml(item.item_id)}">
-                    <option value="raw" ${item.input_state === "raw" ? "selected" : ""}>${escapeHtml(t(lang, "state_raw"))}</option>
-                    <option value="cooked" ${item.input_state === "cooked" ? "selected" : ""}>${escapeHtml(t(lang, "state_cooked"))}</option>
-                    <option value="ready_to_eat" ${item.input_state === "ready_to_eat" ? "selected" : ""}>${escapeHtml(t(lang, "state_ready_to_eat"))}</option>
+                    <option value="raw" ${activeState === "raw" ? "selected" : ""}>${escapeHtml(t(lang, "state_raw"))}</option>
+                    <option value="cooked" ${activeState === "cooked" ? "selected" : ""}>${escapeHtml(t(lang, "state_cooked"))}</option>
+                    <option value="ready_to_eat" ${activeState === "ready_to_eat" ? "selected" : ""}>${escapeHtml(t(lang, "state_ready_to_eat"))}</option>
                   </select>
                   <button type="button" class="success save-edit-btn" data-log-id="${escapeHtml(meal.log_id)}" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "save_btn"))}</button>
                   <button type="button" class="secondary cancel-edit-btn">${escapeHtml(t(lang, "cancel_btn"))}</button>
+                  <button type="button" class="danger remove-item-btn" data-log-id="${escapeHtml(meal.log_id)}" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "remove_item_btn"))}</button>
                 </div>
               </div>
             </div>
@@ -130,7 +157,10 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
                 · ${Math.round(item.macros.kcal)} kcal (P ${round1(item.macros.protein_g)} / C ${round1(item.macros.carbs_g)} / F ${round1(item.macros.fat_g)} / Fib ${round1(item.macros.fiber_g || 0)})
               </div>
             </div>
-            <button type="button" class="secondary start-edit-btn" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "edit_btn"))}</button>
+            <div class="controls-row">
+              <button type="button" class="secondary start-edit-btn" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "edit_btn"))}</button>
+              <button type="button" class="icon-danger-btn remove-item-btn" title="${escapeHtml(t(lang, "remove_item_btn"))}" data-log-id="${escapeHtml(meal.log_id)}" data-item-id="${escapeHtml(item.item_id)}">✕</button>
+            </div>
           </div>
         `;
       })
@@ -356,11 +386,83 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
       const qty = Number(container.querySelector(`#edit-qty-${itemId}`)?.value || 0);
       const unit = (container.querySelector(`#edit-unit-${itemId}`)?.value || "g").trim();
       const state = container.querySelector(`#edit-state-${itemId}`)?.value || "unspecified";
+      const foodId = uiState.editReplacementFood?.food_id || null;
       if (qty > 0) {
-        callbacks.onUpdateMealItem(logId, itemId, qty, unit, state);
+        callbacks.onUpdateMealItem(logId, itemId, qty, unit, state, foodId);
       }
     });
   });
+
+  container.querySelectorAll(".remove-item-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const logId = btn.getAttribute("data-log-id");
+      const itemId = btn.getAttribute("data-item-id");
+      if (logId && itemId) {
+        callbacks.onDeleteMealItem?.(logId, itemId);
+      }
+    });
+  });
+
+  container.querySelector("#clear-rep-food-btn")?.addEventListener("click", () => {
+    callbacks.onSelectEditFood?.(null);
+  });
+
+  if (uiState.editingItemId && callbacks.api) {
+    const eid = uiState.editingItemId;
+    const searchInput = container.querySelector(`#edit-food-search-${eid}`);
+    const resultsHost = container.querySelector(`#edit-food-results-${eid}`);
+    let searchTimer = null;
+
+    const runFoodSearch = async () => {
+      const q = (searchInput?.value || "").trim();
+      if (!resultsHost || q.length < 2) {
+        if (resultsHost) resultsHost.innerHTML = "";
+        return;
+      }
+      try {
+        const resp = await callbacks.api.searchFoods(
+          dashboard.person?.person_id,
+          q,
+          false,
+          { limit: 8 }
+        );
+        const hits = resp?.foods || [];
+        if (!hits.length) {
+          resultsHost.innerHTML = `<div class="hint-text" style="padding:4px;">${escapeHtml(t(lang, "product_not_found"))}</div>`;
+          return;
+        }
+        resultsHost.innerHTML = hits
+          .map(
+            (f, idx) => `
+          <button type="button" class="edit-food-option" data-hit-idx="${idx}">
+            <span>
+              <strong>${escapeHtml(localizedFoodName(f, lang))}</strong>
+              ${f.brand ? ` <span class="pill">${escapeHtml(f.brand)}</span>` : ""}
+            </span>
+            <span class="meal-item-meta">${Math.round(f.macros_per_100g?.kcal || 0)} kcal · ${escapeHtml(t(lang, `state_${f.preparation_state}`) || f.preparation_state)}</span>
+          </button>
+        `
+          )
+          .join("");
+        resultsHost.querySelectorAll(".edit-food-option").forEach((optBtn) => {
+          optBtn.addEventListener("click", () => {
+            const chosen = hits[Number(optBtn.getAttribute("data-hit-idx"))];
+            if (chosen) {
+              callbacks.onSelectEditFood?.(chosen);
+            }
+          });
+        });
+      } catch (_err) {
+        resultsHost.innerHTML = "";
+      }
+    };
+
+    searchInput?.addEventListener("input", () => {
+      if (searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(runFoodSearch, 250);
+    });
+    container.querySelector(".edit-food-search-btn")?.addEventListener("click", runFoodSearch);
+  }
 
   container.querySelector("#save-weight-btn")?.addEventListener("click", () => {
     const val = Number(container.querySelector("#today-weight-input")?.value || 0);

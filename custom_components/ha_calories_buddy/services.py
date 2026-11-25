@@ -29,6 +29,7 @@ from custom_components.ha_calories_buddy.const import (
 )
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
+    MealStatus,
     PersonProfile,
     PlanGenerationOptions,
     PreferenceScope,
@@ -212,11 +213,28 @@ def async_register_services(hass: HomeAssistant) -> None:
             quantity=float(call.data[ATTR_QUANTITY]),
             unit=call.data.get(ATTR_UNIT),
             state=state,
+            food_id=call.data.get(ATTR_FOOD_ID) or None,
         )
         if updated is None:
             raise HomeAssistantError("Meal item not found")
-        await _refresh_person(hass, profile.person_id)
+        await _refresh_person(hass, profile.person_id, "service_update_meal_item")
         return {"meal_log": updated.model_dump(mode="json")}
+
+    async def handle_delete_meal_item(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        updated = await runtime.logging_service.remove_meal_item(
+            profile,
+            str(call.data[ATTR_LOG_ID]),
+            str(call.data[ATTR_ITEM_ID]),
+        )
+        if updated is None:
+            raise HomeAssistantError("Meal item not found")
+        await _refresh_person(hass, profile.person_id, "service_delete_meal_item")
+        return {
+            "meal_log": updated.model_dump(mode="json"),
+            "meal_deleted": updated.status == MealStatus.DELETED,
+        }
 
     async def handle_update_meal_slot(call: ServiceCall) -> dict[str, Any]:
         runtime: DomainRuntime = hass.data[DOMAIN]
@@ -459,6 +477,20 @@ def async_register_services(hass: HomeAssistant) -> None:
                 vol.Required(ATTR_QUANTITY): vol.Coerce(float),
                 vol.Optional(ATTR_UNIT): cv.string,
                 vol.Optional(ATTR_STATE): cv.string,
+                vol.Optional(ATTR_FOOD_ID): cv.string,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "delete_meal_item",
+        handle_delete_meal_item,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_LOG_ID): cv.string,
+                vol.Required(ATTR_ITEM_ID): cv.string,
                 vol.Optional(ATTR_PERSON): cv.string,
             }
         ),

@@ -651,3 +651,117 @@ async def test_v023_tier4_fallback_diversity_anti_repetition_and_grouped_log(
         assert logged.total_macros.kcal == pytest.approx(orata_opt.macros.kcal, abs=2.0)
     finally:
         await client._session.close()
+
+
+async def test_v024_snack_sweet_style_and_user_craving_priority(
+    ctx: dict[str, Any],
+) -> None:
+    """Verify sweet/light snack defaults, craving token exemption, and savory snack guardrail."""
+    profile: PersonProfile = ctx["profile"]
+    today = date.today()
+
+    # Breakfast already contained Greek yogurt 0% earlier today
+    await ctx["meal_repo"].create_meal_log(
+        MealLog(
+            log_id="bk_yogurt",
+            person_id=profile.person_id,
+            log_date=today,
+            meal_slot="Colazione",
+            status=MealStatus.CONFIRMED,
+            total_macros=Macros(kcal=114, protein_g=20.6, carbs_g=7.2, fat_g=0.4, fiber_g=0.0),
+            items=[
+                MealLogItem(
+                    item_id="bk_i_yog",
+                    log_id="bk_yogurt",
+                    food_id="seed_greek_yogurt_0",
+                    display_name="Yogurt Greco 0% Grassi",
+                    input_quantity=200,
+                    input_unit="g",
+                    input_state=PreparationState.READY_TO_EAT,
+                    resolved_grams_ref=200,
+                    macros=Macros(kcal=114, protein_g=20.6, carbs_g=7.2, fat_g=0.4, fiber_g=0.0),
+                )
+            ],
+        )
+    )
+
+    # Attempt 1 wrongly includes dinner items (chicken/salmon) on an evening snack -> guardrail triggers retry!
+    off_topic_payload = MealSuggestionListSchema(
+        suggestions=[
+            PlannedMealSkeleton(
+                meal_slot="Spuntino",
+                title="Ricotta con fette biscottate e mandorle",
+                prep_minutes=5,
+                ingredients=[
+                    PlannedIngredientSpec(name="Ricotta Vaccina", grams=120, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Fette Biscottate", grams=30, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR),
+                    PlannedIngredientSpec(name="Mandorle", grams=15, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Spuntino",
+                title="Pollo con patate",
+                prep_minutes=20,
+                ingredients=[
+                    PlannedIngredientSpec(name="Petto di pollo", grams=150, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Patate", grams=200, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+        ]
+    ).model_dump_json()
+
+    # Attempt 2 returns 2 sweet snack variations honoring yogurt + almonds craving
+    sweet_snack_payload = MealSuggestionListSchema(
+        suggestions=[
+            PlannedMealSkeleton(
+                meal_slot="Spuntino",
+                title="Yogurt greco con mandorle, banana e fiocchi d'avena",
+                prep_minutes=5,
+                ingredients=[
+                    PlannedIngredientSpec(name="Yogurt Greco 0% Grassi", grams=170, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Mandorle", grams=20, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                    PlannedIngredientSpec(name="Banana", grams=120, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PRODUCE_FIXED),
+                    PlannedIngredientSpec(name="Fiocchi d'avena", grams=30, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Spuntino",
+                title="Yogurt greco con mandorle, frutti di bosco e fette biscottate",
+                prep_minutes=5,
+                ingredients=[
+                    PlannedIngredientSpec(name="Yogurt Greco 0% Grassi", grams=170, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Mandorle", grams=20, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                    PlannedIngredientSpec(name="Frutti di Bosco", grams=100, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PRODUCE_FIXED),
+                    PlannedIngredientSpec(name="Fette Biscottate", grams=25, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+        ]
+    ).model_dump_json()
+
+    client = ScriptedLLMClient([off_topic_payload, sweet_snack_payload])
+    try:
+        planner = MealPlannerService(
+            plan_repo=ctx["plan_repo"],
+            meal_repo=ctx["meal_repo"],
+            preference_engine=ctx["pref_engine"],
+            resolver=ctx["resolver"],
+            llm_client_getter=lambda _p: client,
+        )
+        # Even with a high remaining budget (>= 650 kcal), snack must NOT trigger multi-course dinner structure
+        suggestions = await planner.suggest_meal(
+            profile,
+            meal_slot="Spuntino serale",
+            target_macros=Macros(kcal=720.0, protein_g=45.0, carbs_g=75.0, fat_g=24.0, fiber_g=9.0),
+            user_hint="Ho voglia di yogurt e mandorle",
+            count=2,
+            reference_date=today,
+        )
+        assert len(suggestions) == 2
+        assert "SWEET / LIGHT SNACK BY DEFAULT" in client.system_prompts_seen[0]
+        assert "USER CRAVING IS MANDATORY ACROSS ALL OPTIONS" in client.system_prompts_seen[0]
+        assert "MULTI-COURSE STRUCTURE" not in client.system_prompts_seen[0]
+        assert "ALREADY EATEN TODAY" not in client.system_prompts_seen[0]
+        assert "QUALITY IMPROVEMENT NEEDED" in client.prompts_seen[1]
+        assert all("Yogurt" in s.title for s in suggestions)
+    finally:
+        await client._session.close()

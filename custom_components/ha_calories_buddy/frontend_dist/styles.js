@@ -457,4 +457,34 @@ export const CARD_STYLES = `
     color: var(--primary-text-color);
     margin-right: 4px;
   }
+  .icon-danger-btn {
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: rgba(219, 68, 55, 0.12);
+    color: var(--error-color, #db4437);
+    font-weight: 600;
+    font-size: 0.78rem;
+  }
+  .edit-food-results {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+    max-height: 170px;
+    overflow-y: auto;
+  }
+  .edit-food-option {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.25));
+    background: var(--card-background-color, #fff);
+    color: var(--primary-text-color);
+    font-size: 0.8rem;
+  }
 `;

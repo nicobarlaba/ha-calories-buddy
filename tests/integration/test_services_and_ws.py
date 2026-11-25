@@ -233,3 +233,88 @@ async def test_services_and_websocket_multi_user_isolation(
     assert msg8["success"] is True
     assert msg8["result"]["snapshot"]["weight_kg"] == pytest.approx(78.4)
     assert "super-secret-do-not-leak" not in json.dumps(msg8)
+
+    # 5. WS update_meal_item with Vault food replacement + WS/service delete_meal_item
+    await client.send_json(
+        {
+            "id": 73,
+            "type": f"{DOMAIN}/log_item",
+            "food_id": "seed_olive_oil",
+            "quantity": 10,
+            "unit": "g",
+            "state": "ready_to_eat",
+            "meal_slot": "Cena",
+        }
+    )
+    msg73 = await client.receive_json()
+    assert msg73["success"] is True
+    extra_log = msg73["result"]["meal_log"]
+    extra_item_id = extra_log["items"][0]["item_id"]
+
+    # Add a 2-item meal via AI parse so deleting 1 item keeps the meal alive
+    two_item_json = json.dumps(
+        {
+            "meal_slot": "Cena",
+            "items": [
+                {"name": "pane integrale", "quantity": 70, "unit": "g", "preparation_state": "ready_to_eat"},
+                {"name": "banana", "quantity": 120, "unit": "g", "preparation_state": "ready_to_eat"},
+            ],
+        }
+    )
+    with patch(
+        "custom_components.ha_calories_buddy.core.llm.ollama_client.OllamaClient._raw_structured_completion",
+        return_value=two_item_json,
+    ):
+        await client.send_json(
+            {"id": 74, "type": f"{DOMAIN}/log_text", "text": "70g pane integrale e 1 banana"}
+        )
+        msg74 = await client.receive_json()
+    assert msg74["success"] is True
+    combo_log = msg74["result"]["meal_log"]
+    combo_log_id = combo_log["log_id"]
+    bread_item_id = combo_log["items"][0]["item_id"]
+    banana_item_id = combo_log["items"][1]["item_id"]
+
+    # Replace bread item with white bread via WS update_meal_item(food_id=...)
+    await client.send_json(
+        {
+            "id": 75,
+            "type": f"{DOMAIN}/update_meal_item",
+            "log_id": combo_log_id,
+            "item_id": bread_item_id,
+            "quantity": 80,
+            "unit": "g",
+            "food_id": "seed_white_bread",
+        }
+    )
+    msg75 = await client.receive_json()
+    assert msg75["success"] is True
+    swapped_item = next(i for i in msg75["result"]["meal_log"]["items"] if i["item_id"] == bread_item_id)
+    assert swapped_item["food_id"] == "seed_white_bread"
+
+    # Delete the unwanted extra banana item via WS delete_meal_item
+    await client.send_json(
+        {
+            "id": 76,
+            "type": f"{DOMAIN}/delete_meal_item",
+            "log_id": combo_log_id,
+            "item_id": banana_item_id,
+        }
+    )
+    msg76 = await client.receive_json()
+    assert msg76["success"] is True
+    assert msg76["result"]["meal_deleted"] is False
+    assert len(msg76["result"]["meal_log"]["items"]) == 1
+
+    # Delete sole remaining item from extra_log via HA service -> parent meal soft-deleted
+    del_svc = await hass.services.async_call(
+        DOMAIN,
+        "delete_meal_item",
+        {"log_id": extra_log["log_id"], "item_id": extra_item_id},
+        context=Context(user_id=hass_admin_user.id),
+        blocking=True,
+        return_response=True,
+    )
+    assert del_svc is not None
+    assert del_svc["meal_deleted"] is True
+    assert del_svc["meal_log"]["status"] == "deleted"

@@ -15,6 +15,119 @@ from custom_components.ha_calories_buddy.core.models import (
 from custom_components.ha_calories_buddy.core.planner.preferences import (
     PreferenceContext,
 )
+from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    canonical_slot_group,
+)
+from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
+
+_GENERIC_HINT_FILLERS = frozenset(
+    {
+        "veloce",
+        "velocemente",
+        "rapido",
+        "rapida",
+        "quick",
+        "fast",
+        "leggero",
+        "leggera",
+        "light",
+        "semplice",
+        "simple",
+        "easy",
+        "facile",
+        "voglia",
+        "qualcosa",
+        "pasto",
+        "spuntino",
+        "merenda",
+        "serale",
+        "notturno",
+        "cena",
+        "pranzo",
+        "colazione",
+        "breakfast",
+        "lunch",
+        "dinner",
+        "snack",
+        "minuti",
+        "minutes",
+        "something",
+        "con",
+        "with",
+        "senza",
+        "without",
+        "dolce",
+        "sweet",
+        "salato",
+        "salata",
+        "savory",
+        "salty",
+    }
+)
+
+_SAVORY_HINT_TERMS = frozenset(
+    {
+        "salato",
+        "salata",
+        "savory",
+        "salty",
+        "pollo",
+        "tacchino",
+        "manzo",
+        "carne",
+        "bresaola",
+        "prosciutto",
+        "tonno",
+        "salmone",
+        "merluzzo",
+        "pesce",
+        "uova",
+        "uovo",
+        "frittata",
+        "panino",
+        "toast salato",
+        "pasta",
+        "riso",
+        "legumi",
+        "lenticchie",
+        "ceci",
+        "insalata",
+        "chicken",
+        "turkey",
+        "beef",
+        "meat",
+        "fish",
+        "tuna",
+        "salmon",
+        "eggs",
+        "egg",
+        "sandwich",
+        "wrap",
+        "salad",
+    }
+)
+
+
+def extract_hint_tokens(user_hint: str) -> set[str]:
+    """Extract non-generic food/theme tokens (len >= 4) from a user hint."""
+    norm = normalize_text(user_hint)
+    return {
+        tok
+        for tok in norm.split()
+        if len(tok) >= 4 and tok not in _GENERIC_HINT_FILLERS
+    }
+
+
+def is_savory_hint(user_hint: str) -> bool:
+    """Return True when the user explicitly requests a savory or meat/fish/pasta dish."""
+    norm = normalize_text(user_hint)
+    if not norm:
+        return False
+    tokens = set(norm.split())
+    return any(
+        term in tokens or (" " in term and term in norm)
+        for term in _SAVORY_HINT_TERMS
+    )
 
 
 class PlannedIngredientSpec(BaseModel):
@@ -64,7 +177,24 @@ class SingleMealSwapSchema(BaseModel):
     meal: PlannedMealSkeleton
 
 
-def _format_preference_block(ctx: PreferenceContext) -> str:
+def _format_preference_block(
+    ctx: PreferenceContext,
+    user_hint: str = "",
+) -> str:
+    hint_tokens = extract_hint_tokens(user_hint)
+    hint_norm = normalize_text(user_hint)
+
+    def _matches_user_hint(food_name: str) -> bool:
+        if not hint_tokens and not hint_norm:
+            return False
+        fnorm = normalize_text(food_name)
+        if not fnorm:
+            return False
+        if fnorm in hint_norm or hint_norm in fnorm:
+            return True
+        ftokens = {tok for tok in fnorm.split() if len(tok) >= 4}
+        return bool(hint_tokens and (ftokens & hint_tokens))
+
     parts: list[str] = [f"Dietary regime: {ctx.dietary_regime or 'omnivore'}."]
     if ctx.hard_constraints:
         parts.append(
@@ -84,12 +214,20 @@ def _format_preference_block(ctx: PreferenceContext) -> str:
         parts.append("Prioritize favorites: " + ", ".join(liked) + ".")
     if ctx.preferred_brands:
         parts.append("Preferred brands: " + ", ".join(ctx.preferred_brands[:8]) + ".")
-    if ctx.eaten_today_foods:
+    filtered_eaten = [
+        f for f in ctx.eaten_today_foods if not _matches_user_hint(f)
+    ]
+    if filtered_eaten:
         parts.append(
             "ALREADY EATEN TODAY — DO NOT repeat these main foods or protein/carb bases "
             "in your proposals unless explicitly requested by the user: "
-            + ", ".join(ctx.eaten_today_foods[:12])
+            + ", ".join(filtered_eaten[:12])
             + "."
+        )
+    if hint_tokens and len(filtered_eaten) < len(ctx.eaten_today_foods):
+        parts.append(
+            "Note: User explicitly asked for a craving/ingredient in `User request/hint` — "
+            "ignore same-day avoidance for those requested items and honor the craving cleanly."
         )
     savory_cats = [
         c
@@ -130,7 +268,13 @@ def build_suggest_meal_prompts(
     vault_catalog_hint: str = "",
 ) -> tuple[str, str]:
     """Build prompts asking the Chef LLM for 1-3 tailored meal options."""
-    is_large_meal = target_macros.kcal >= 650.0
+    slot_group = canonical_slot_group(meal_slot)
+    is_snack_or_breakfast = slot_group in {"breakfast", "morning_snack", "snack"}
+    wants_savory = is_savory_hint(user_hint)
+    hint_tokens = extract_hint_tokens(user_hint)
+    has_craving = bool(user_hint.strip() and hint_tokens)
+
+    is_large_meal = (not is_snack_or_breakfast) and target_macros.kcal >= 650.0
     course_guidance = (
         "MULTI-COURSE STRUCTURE (budget >= 650 kcal): Design each option as a complete, "
         "satisfying balanced meal rather than a tiny single plate — combine realistic courses "
@@ -141,16 +285,64 @@ def build_suggest_meal_prompts(
         if is_large_meal
         else ""
     )
-    diversity_guidance = (
-        f"INDEPENDENT ALTERNATIVE OPTIONS: Return {count} completely independent meal choices "
-        "(the user will pick ONE option to eat, NOT all options together). "
-        "ALL options MUST use completely distinct primary protein sources AND distinct primary "
-        "carbohydrate bases (e.g., option 1: fish + bread/potatoes; option 2: lean poultry/meat + "
-        "rice/farro/quinoa; option 3: eggs/cheese/legumes/tofu + crusty bread/grains). NEVER suggest "
-        "multiple pasta-based or legume-based options in the same response.\n"
-        if count >= 2
-        else ""
+
+    slot_style_guidance = ""
+    if is_snack_or_breakfast and not wants_savory:
+        slot_style_guidance = (
+            f"SLOT STYLE ({meal_slot.upper()} — SWEET / LIGHT SNACK BY DEFAULT): "
+            "Propose ONLY quick, light, sweet or sweet-neutral snack/breakfast creations "
+            "(e.g. Greek yogurt, ricotta, cottage cheese, fresh fruit/berries/banana, oats/granola, "
+            "fette biscottate/rusks, whole-grain toast, peanut butter/nuts, dark chocolate, honey, whey). "
+            "NEVER propose heavy cooked lunch/dinner entrees (no chicken, turkey, beef, salmon, tuna, cod, "
+            "pasta, rice entrees, cooked potatoes, or savory meat/fish salads).\n"
+        )
+    elif is_snack_or_breakfast and wants_savory:
+        slot_style_guidance = (
+            f"SLOT STYLE ({meal_slot.upper()} — QUICK SAVORY SNACK): "
+            "Keep each option a fast, portable light snack rather than a multi-course dinner.\n"
+        )
+
+    craving_guidance = (
+        "USER CRAVING IS MANDATORY ACROSS ALL OPTIONS: The user specifically requested "
+        f"'{user_hint.strip()}'. EVERY returned option MUST center around or prominently incorporate "
+        "that requested request/craving — differentiate the options through creative complementary pairings "
+        "(e.g., different fruits, crunch/rusks/oats, nuts/chocolate, or preparation style) instead of "
+        "abandoning the user's craving on 2 out of 3 options.\n"
+        if has_craving and count >= 2
+        else (
+            f"USER CRAVING PRIORITY: Strictly center the option around '{user_hint.strip()}'.\n"
+            if has_craving
+            else ""
+        )
     )
+
+    if count >= 2:
+        if has_craving:
+            diversity_guidance = (
+                f"INDEPENDENT ALTERNATIVE OPTIONS: Return {count} distinct alternative snack/meal variants "
+                "(the user will pick ONE option, NOT all together). Keep the user's requested craving at the center "
+                "of every option while varying the secondary bases/toppings so no two options feel identical.\n"
+            )
+        elif is_snack_or_breakfast and not wants_savory:
+            diversity_guidance = (
+                f"INDEPENDENT ALTERNATIVE OPTIONS: Return {count} completely independent sweet/light snack options "
+                "(the user will pick ONE option to eat, NOT all options together). "
+                "Vary the protein/dairy base and carb/fruit toppings across options "
+                "(e.g., option 1: Greek yogurt + berries + oats; option 2: ricotta + pear + dark chocolate + fette biscottate; "
+                "option 3: cottage cheese / whey smoothie bowl + banana + almonds).\n"
+            )
+        else:
+            diversity_guidance = (
+                f"INDEPENDENT ALTERNATIVE OPTIONS: Return {count} completely independent meal choices "
+                "(the user will pick ONE option to eat, NOT all options together). "
+                "ALL options MUST use completely distinct primary protein sources AND distinct primary "
+                "carbohydrate bases (e.g., option 1: fish + bread/potatoes; option 2: lean poultry/meat + "
+                "rice/farro/quinoa; option 3: eggs/cheese/legumes/tofu + crusty bread/grains). NEVER suggest "
+                "multiple pasta-based or legume-based options in the same response.\n"
+            )
+    else:
+        diversity_guidance = ""
+
     vault_section = (
         f"\nVerified Food Vault ingredients (prefer exact names when fitting):\n{vault_catalog_hint}\n"
         if vault_catalog_hint
@@ -164,12 +356,14 @@ def build_suggest_meal_prompts(
         "and accurate preparation_state ('raw', 'cooked', or 'ready_to_eat').\n"
         "Classify each ingredient's `role`: 'protein_anchor', 'carb_anchor', 'fat_anchor', "
         "'produce_fixed', or 'condiment_fixed'.\n"
+        f"{slot_style_guidance}"
+        f"{craving_guidance}"
         f"{diversity_guidance}"
         f"{course_guidance}"
         "Python will algebraically scale the anchor ingredients to hit exact macros for EACH option, "
         "so design a genuinely appetizing ~100%-budget meal per option.\n"
         "NEVER violate dietary regime, allergies, intolerances, or blacklist.\n"
-        f"{_format_preference_block(ctx)}"
+        f"{_format_preference_block(ctx, user_hint=user_hint)}"
         f"{vault_section}"
     )
     hint_line = f"\nUser request/hint: {user_hint.strip()}" if user_hint.strip() else ""

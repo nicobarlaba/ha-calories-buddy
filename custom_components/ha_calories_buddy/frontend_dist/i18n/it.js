@@ -1,4 +1,4 @@
-/** Italian localization strings for ha-calories-buddy-card v0.2.3 */
+/** Italian localization strings for ha-calories-buddy-card v0.2.4 */
 export const IT = {
   title: "Calories Buddy",
   refresh_btn: "Aggiorna",
@@ -28,6 +28,9 @@ export const IT = {
   confirm_btn: "Conferma",
   confirm_promote_btn: "Conferma e Salva Cibo",
   edit_btn: "Modifica",
+  remove_item_btn: "Rimuovi",
+  replace_food_placeholder: "Sostituisci con alimento in Archivio...",
+  replaced_badge: "Sostituito",
   save_btn: "Salva",
   cancel_btn: "Annulla",
   delete_btn: "Elimina",
@@ -54,7 +57,10 @@ export const IT = {
   barcode_modal_title: "Scanner & Ricerca Barcode",
   start_camera_btn: "Avvia Fotocamera",
   stop_camera_btn: "Ferma Fotocamera",
-  camera_https_hint: "La fotocamera live richiede HTTPS o localhost e supporto BarcodeDetector. Puoi sempre inserire manualmente il codice EAN qui sotto.",
+  photo_barcode_btn: "Scatta foto barcode",
+  decoding_photo: "Analisi foto codice a barre...",
+  photo_barcode_not_found: "Nessun codice a barre EAN leggibile nella foto. Riprova più vicino/a fuoco o inserisci le cifre a mano.",
+  camera_https_hint: "La fotocamera live richiede HTTPS o localhost. Usa 'Scatta foto barcode' qui sopra (funziona anche in HTTP e su app iOS/Android) oppure inserisci il codice EAN manualmente.",
   ean_placeholder: "Inserisci codice EAN / UPC...",
   lookup_btn: "Cerca Barcode",
   product_not_found: "Nessun prodotto trovato per questo barcode. Puoi aggiungerlo manualmente qui sotto.",

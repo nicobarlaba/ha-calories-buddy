@@ -17,6 +17,8 @@ from custom_components.ha_calories_buddy.core.llm.prompts.meal_plan import (
     build_day_plan_prompts,
     build_suggest_meal_prompts,
     build_swap_meal_prompts,
+    extract_hint_tokens,
+    is_savory_hint,
 )
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
@@ -56,6 +58,7 @@ from custom_components.ha_calories_buddy.core.planner.preferences import (
     PreferenceEngine,
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    canonical_slot_group,
     default_slots_for_language,
     resolve_meal_slot,
 )
@@ -124,7 +127,9 @@ class MealPlannerService:
         )
 
         ctx = await self._pref_engine.build_context(profile, reference_date=reference_date)
-        vault_hint = await self._build_vault_catalog_hint(profile)
+        vault_hint = await self._build_vault_catalog_hint(
+            profile, meal_slot=chosen_slot, user_hint=user_hint
+        )
         requested_count = max(1, min(3, count))
         sys_prompt, user_prompt = build_suggest_meal_prompts(
             profile=profile,
@@ -170,12 +175,13 @@ class MealPlannerService:
         if not safe_skeletons:
             raise HardConstraintViolationError(last_violations or ["no_safe_suggestion"])
 
-        # Non-blocking single retry for culinary diversity, anti-repetition, or unresolved ingredients
+        # Non-blocking single retry for culinary diversity, slot coherence, anti-repetition, or missing nutrition
         quality_issues = self._detect_suggestion_quality_issues(
             safe_skeletons[:requested_count],
             ctx=ctx,
             requested_count=requested_count,
             user_hint=user_hint,
+            meal_slot=chosen_slot,
         )
         if quality_issues:
             try:
@@ -202,6 +208,7 @@ class MealPlannerService:
                         ctx=ctx,
                         requested_count=requested_count,
                         user_hint=user_hint,
+                        meal_slot=chosen_slot,
                     )
                     if len(retry_issues) <= len(quality_issues):
                         safe_skeletons = retry_passed
@@ -796,40 +803,68 @@ class MealPlannerService:
 
         return accepted, list(dict.fromkeys(all_violations))
 
-    async def _build_vault_catalog_hint(self, profile: PersonProfile) -> str:
+    async def _build_vault_catalog_hint(
+        self,
+        profile: PersonProfile,
+        *,
+        meal_slot: str | None = None,
+        user_hint: str = "",
+    ) -> str:
         """Build a compact categorized list of verified Food Vault names for the Chef."""
         foods = await self._resolver.list_vault_foods(
             person_id=profile.person_id, limit=120
         )
         if not foods:
             return ""
-        buckets: dict[str, list[str]] = {
-            "Protein": [],
-            "Carbs": [],
-            "Legumes": [],
-            "Dairy": [],
-            "Vegetables": [],
-            "Fruit": [],
-            "Fats": [],
-        }
-        cat_to_bucket = {
-            "poultry": "Protein",
-            "red_meat": "Protein",
-            "fish": "Protein",
-            "egg": "Protein",
-            "rice": "Carbs",
-            "pasta": "Carbs",
-            "grains": "Carbs",
-            "oats": "Carbs",
-            "bread": "Carbs",
-            "potatoes": "Carbs",
-            "legumes": "Legumes",
-            "dairy": "Dairy",
-            "vegetables": "Vegetables",
-            "fruit": "Fruit",
-            "oil": "Fats",
-            "nuts": "Fats",
-        }
+        slot_group = canonical_slot_group(meal_slot or "")
+        sweet_snack_focus = (
+            slot_group in {"breakfast", "morning_snack", "snack"}
+            and not is_savory_hint(user_hint)
+        )
+        if sweet_snack_focus:
+            buckets: dict[str, list[str]] = {
+                "Dairy": [],
+                "Carbs": [],
+                "Fruit": [],
+                "Fats": [],
+                "Snack": [],
+            }
+            cat_to_bucket = {
+                "dairy": "Dairy",
+                "oats": "Carbs",
+                "bread": "Carbs",
+                "fruit": "Fruit",
+                "nuts": "Fats",
+                "snack": "Snack",
+            }
+        else:
+            buckets = {
+                "Protein": [],
+                "Carbs": [],
+                "Legumes": [],
+                "Dairy": [],
+                "Vegetables": [],
+                "Fruit": [],
+                "Fats": [],
+            }
+            cat_to_bucket = {
+                "poultry": "Protein",
+                "red_meat": "Protein",
+                "fish": "Protein",
+                "egg": "Protein",
+                "rice": "Carbs",
+                "pasta": "Carbs",
+                "grains": "Carbs",
+                "oats": "Carbs",
+                "bread": "Carbs",
+                "potatoes": "Carbs",
+                "legumes": "Legumes",
+                "dairy": "Dairy",
+                "vegetables": "Vegetables",
+                "fruit": "Fruit",
+                "oil": "Fats",
+                "nuts": "Fats",
+            }
         for food in foods:
             bucket = cat_to_bucket.get(food.category.lower())
             if bucket is None or len(buckets[bucket]) >= 8:
@@ -851,10 +886,17 @@ class MealPlannerService:
         ctx: PreferenceContext,
         requested_count: int,
         user_hint: str = "",
+        meal_slot: str = "",
     ) -> list[str]:
-        """Flag unresolved ingredients, same-day food repetition, or duplicate bases."""
+        """Flag unresolved ingredients, slot mismatch, same-day repetition, or duplicate bases."""
         issues: list[str] = []
         hint_norm = normalize_text(user_hint)
+        hint_tokens = extract_hint_tokens(user_hint)
+        slot_group = canonical_slot_group(meal_slot)
+        is_sweet_slot = (
+            slot_group in {"breakfast", "morning_snack", "snack"}
+            and not is_savory_hint(user_hint)
+        )
 
         # 1. Check excessive unresolved ingredients (> 25% missing nutrition)
         for skel, ings in candidates:
@@ -867,7 +909,21 @@ class MealPlannerService:
                 )
                 break
 
-        # 2. Check same-day repetition of primary savory anchors unless explicitly requested
+        # 2. Check snack/breakfast culinary coherence (no chicken/fish/pasta entrees unless requested)
+        savory_entree_cats = {"poultry", "red_meat", "fish", "pasta", "rice", "legumes"}
+        if is_sweet_slot:
+            for skel, ings in candidates:
+                for ing in ings:
+                    if ing.food is None:
+                        continue
+                    if ing.food.category.lower() in savory_entree_cats:
+                        issues.append(
+                            f"Option '{skel.title}' includes a savory lunch/dinner ingredient "
+                            f"('{ing.name}'); propose light sweet/neutral snack ideas suitable for {meal_slot}."
+                        )
+                        break
+
+        # 3. Check same-day repetition of primary savory/protein anchors unless requested in user_hint
         eaten_norms = [
             (raw, normalize_text(raw))
             for raw in ctx.eaten_today_foods
@@ -884,9 +940,11 @@ class MealPlannerService:
                 if not ing_norm:
                     continue
                 for raw_eaten, eaten_norm in eaten_norms:
-                    if eaten_norm in hint_norm:
-                        continue
                     eaten_tokens = [t for t in eaten_norm.split() if len(t) >= 4]
+                    if eaten_norm in hint_norm or (
+                        hint_tokens and any(tok in hint_tokens for tok in eaten_tokens)
+                    ):
+                        continue
                     ing_tokens = {t for t in ing_norm.split() if len(t) >= 4}
                     if (
                         eaten_norm == ing_norm
@@ -897,44 +955,52 @@ class MealPlannerService:
                         )
                         break
 
-        # 3. Check cross-option anchor diversity when >= 2 options exist
+        # 4. Check cross-option anchor diversity when >= 2 options exist
         if requested_count >= 2 and len(candidates) >= 2:
-            signatures: list[tuple[str, str]] = []
-            heavy_carb_cats: list[str] = []
-            for _skel, ings in candidates:
-                prot = next(
-                    (
-                        normalize_text(i.name).split()[0]
-                        for i in ings
-                        if i.role == IngredientRole.PROTEIN_ANCHOR and normalize_text(i.name)
-                    ),
-                    "",
-                )
-                carb_ing = next(
-                    (i for i in ings if i.role == IngredientRole.CARB_ANCHOR),
-                    None,
-                )
-                carb = (
-                    normalize_text(carb_ing.name).split()[0]
-                    if carb_ing and normalize_text(carb_ing.name)
-                    else ""
-                )
-                signatures.append((prot, carb))
-                if carb_ing and carb_ing.food is not None:
-                    c_cat = carb_ing.food.category.lower()
-                    if c_cat in {"pasta", "rice", "legumes"}:
-                        heavy_carb_cats.append(c_cat)
-
-            non_empty = [sig for sig in signatures if sig != ("", "")]
-            if len(non_empty) >= 2 and len(set(non_empty)) < len(non_empty):
-                issues.append(
-                    "Multiple options share the same protein/carb base; vary protein AND carb across options."
-                )
-            for repeated_cat in ("pasta", "legumes"):
-                if heavy_carb_cats.count(repeated_cat) >= 2:
+            if hint_tokens:
+                # When user gave a specific craving (e.g. yogurt & peanut butter), ensure distinct variants
+                norm_titles = [normalize_text(skel.title) for skel, _ in candidates]
+                if len(set(norm_titles)) < len(norm_titles):
                     issues.append(
-                        f"Do not propose multiple {repeated_cat} options; diversify bases cleanly."
+                        "Multiple options have identical titles; create distinct variations around the user's craving."
                     )
+            else:
+                signatures: list[tuple[str, str]] = []
+                heavy_carb_cats: list[str] = []
+                for _skel, ings in candidates:
+                    prot = next(
+                        (
+                            normalize_text(i.name).split()[0]
+                            for i in ings
+                            if i.role == IngredientRole.PROTEIN_ANCHOR and normalize_text(i.name)
+                        ),
+                        "",
+                    )
+                    carb_ing = next(
+                        (i for i in ings if i.role == IngredientRole.CARB_ANCHOR),
+                        None,
+                    )
+                    carb = (
+                        normalize_text(carb_ing.name).split()[0]
+                        if carb_ing and normalize_text(carb_ing.name)
+                        else ""
+                    )
+                    signatures.append((prot, carb))
+                    if carb_ing and carb_ing.food is not None:
+                        c_cat = carb_ing.food.category.lower()
+                        if c_cat in {"pasta", "rice", "legumes"}:
+                            heavy_carb_cats.append(c_cat)
+
+                non_empty = [sig for sig in signatures if sig != ("", "")]
+                if len(non_empty) >= 2 and len(set(non_empty)) < len(non_empty):
+                    issues.append(
+                        "Multiple options share the same protein/carb base; vary protein AND carb across options."
+                    )
+                for repeated_cat in ("pasta", "legumes"):
+                    if heavy_carb_cats.count(repeated_cat) >= 2:
+                        issues.append(
+                            f"Do not propose multiple {repeated_cat} options; diversify bases cleanly."
+                        )
 
         return list(dict.fromkeys(issues))
 

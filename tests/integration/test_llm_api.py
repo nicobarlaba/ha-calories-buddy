@@ -135,13 +135,42 @@ async def test_assist_llm_api_tools(hass: HomeAssistant) -> None:
         assert corr_res.data["meal_slot"] == "Cena"
         assert corr_res.data["new_meal_kcal"] == pytest.approx(544.0, abs=1.0)
 
+        # Replace Basmati Rice with Pasta and remove Lentils via CorrectLastMealTool
+        swap_res = await api_instance.async_call_tool(
+            llm.ToolInput(
+                tool_name="correct_last_meal",
+                tool_args={
+                    "item_name": "Riso Basmati",
+                    "replacement_food_name": "Pasta di Semola (Cruda)",
+                },
+            )
+        )
+        assert swap_res.error is False
+        assert float(swap_res.data["new_meal_kcal"]) > 500.0
+
+        remove_res = await api_instance.async_call_tool(
+            llm.ToolInput(
+                tool_name="correct_last_meal",
+                tool_args={
+                    "item_name": "Lenticchie",
+                    "remove_item": True,
+                },
+            )
+        )
+        assert remove_res.error is False
+        assert remove_res.data["removed"] is True
+        assert remove_res.data["meal_deleted"] is False
+        assert float(remove_res.data["new_meal_kcal"]) < 420.0
+
         # Query today summary including fiber metrics
         summary_res = await api_instance.async_call_tool(
             llm.ToolInput(tool_name="get_today_nutrition_summary", tool_args={})
         )
         assert summary_res.error is False
         assert summary_res.data["person"] == "Marco"
-        assert summary_res.data["consumed_kcal"] == pytest.approx(544.0, abs=1.0)
+        assert summary_res.data["consumed_kcal"] == pytest.approx(
+            float(remove_res.data["new_meal_kcal"]), abs=1.0
+        )
         assert float(summary_res.data["fiber_consumed_g"]) > 0.0
         assert float(summary_res.data["fiber_target_g"]) >= 20.0
 

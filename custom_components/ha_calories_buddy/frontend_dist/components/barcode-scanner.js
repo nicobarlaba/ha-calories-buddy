@@ -1,4 +1,5 @@
-/** Barcode Scanner & Manual EAN Lookup Modal */
+/** Barcode Scanner, HTTP Photo Decoder & Manual EAN Lookup Modal */
+import { decodeBarcodeFromImageSource } from "./barcode-decoder.js";
 import { t } from "../i18n/index.js";
 import { escapeHtml, localizedFoodName, pickDefaultSlotForNow, round1 } from "../utils.js";
 
@@ -102,6 +103,49 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
     }
   };
 
+  const decodePhotoFile = async (file) => {
+    if (!file) return;
+    stopCamera();
+    statusMsg = t(language, "decoding_photo");
+    foundFood = null;
+    notFound = false;
+    render();
+
+    let objectUrl = null;
+    try {
+      let decoded = null;
+      if (typeof createImageBitmap === "function") {
+        const bitmap = await createImageBitmap(file);
+        try {
+          decoded = await decodeBarcodeFromImageSource(bitmap);
+        } finally {
+          bitmap.close?.();
+        }
+      } else {
+        objectUrl = URL.createObjectURL(file);
+        const img = new Image();
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = objectUrl;
+        });
+        decoded = await decodeBarcodeFromImageSource(img);
+      }
+
+      if (decoded) {
+        await doLookup(decoded);
+      } else {
+        statusMsg = t(language, "photo_barcode_not_found");
+        render();
+      }
+    } catch (err) {
+      statusMsg = err?.message || t(language, "photo_barcode_not_found");
+      render();
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    }
+  };
+
   const render = () => {
     const draft = foundFood || (notFound
       ? {
@@ -126,6 +170,8 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
           </div>
 
           <div class="controls-row" style="margin-bottom: 10px;">
+            <button type="button" id="photo-scan-btn">📸 ${escapeHtml(t(language, "photo_barcode_btn"))}</button>
+            <input type="file" id="barcode-photo-input" accept="image/*" capture="environment" style="display: none;" />
             ${
               scanning
                 ? `<button type="button" class="danger" id="stop-cam-btn">${escapeHtml(t(language, "stop_camera_btn"))}</button>`
@@ -215,6 +261,17 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
     `;
 
     host.querySelector("#close-barcode-modal")?.addEventListener("click", closeModal);
+    host.querySelector("#photo-scan-btn")?.addEventListener("click", () => {
+      host.querySelector("#barcode-photo-input")?.click();
+    });
+    host.querySelector("#barcode-photo-input")?.addEventListener("change", async (ev) => {
+      const input = ev.target;
+      const file = input?.files?.[0];
+      if (input) input.value = "";
+      if (file) {
+        await decodePhotoFile(file);
+      }
+    });
     host.querySelector("#start-cam-btn")?.addEventListener("click", startCamera);
     host.querySelector("#stop-cam-btn")?.addEventListener("click", () => {
       stopCamera();

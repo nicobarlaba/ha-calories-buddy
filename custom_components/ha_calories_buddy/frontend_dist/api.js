@@ -1,4 +1,4 @@
-/** WebSocket API client for ha-calories-buddy Lovelace card v0.2.3 */
+/** WebSocket API client for ha-calories-buddy Lovelace card v0.2.4 */
 
 export class CaloriesBuddyApi {
   constructor(hass) {
@@ -50,14 +50,24 @@ export class CaloriesBuddyApi {
     });
   }
 
-  updateMealItem(personId, logId, itemId, quantity, unit, state) {
-    return this.call("update_meal_item", {
+  updateMealItem(personId, logId, itemId, quantity, unit, state, foodId = null) {
+    const payload = {
       ...(personId ? { person_id: personId } : {}),
       log_id: logId,
       item_id: itemId,
       quantity,
       unit,
       state,
+    };
+    if (foodId) payload.food_id = foodId;
+    return this.call("update_meal_item", payload);
+  }
+
+  deleteMealItem(personId, logId, itemId) {
+    return this.call("delete_meal_item", {
+      ...(personId ? { person_id: personId } : {}),
+      log_id: logId,
+      item_id: itemId,
     });
   }
 

@@ -252,6 +252,8 @@ class MealRepository:
         macros: Macros,
         food_id: str | None = None,
         display_name: str | None = None,
+        brand: str | None = None,
+        update_brand: bool = False,
         confidence: ConfidenceLevel = ConfidenceLevel.HIGH,
         warning_code: WarningCode | None = None,
         warning_detail: str | None = None,
@@ -261,12 +263,35 @@ class MealRepository:
         if existing is None or existing.person_id != person_id:
             return None
 
+        brand_clause = ",\n                    brand = ?" if update_brand else ""
+        params: list[Any] = [food_id, display_name]
+        if update_brand:
+            params.append(brand)
+        params.extend(
+            [
+                input_quantity,
+                input_unit,
+                input_state.value,
+                resolved_grams_ref,
+                macros.kcal,
+                macros.protein_g,
+                macros.carbs_g,
+                macros.fat_g,
+                macros.fiber_g,
+                confidence.value,
+                warning_code.value if warning_code else None,
+                warning_detail,
+                item_id,
+                log_id,
+            ]
+        )
+
         async with self._db.transaction() as conn:
             await conn.execute(
-                """
+                f"""
                 UPDATE meal_log_items
                 SET food_id = COALESCE(?, food_id),
-                    display_name = COALESCE(?, display_name),
+                    display_name = COALESCE(?, display_name){brand_clause},
                     input_quantity = ?,
                     input_unit = ?,
                     input_state = ?,
@@ -281,24 +306,7 @@ class MealRepository:
                     warning_detail = ?
                 WHERE item_id = ? AND log_id = ?
                 """,
-                (
-                    food_id,
-                    display_name,
-                    input_quantity,
-                    input_unit,
-                    input_state.value,
-                    resolved_grams_ref,
-                    macros.kcal,
-                    macros.protein_g,
-                    macros.carbs_g,
-                    macros.fat_g,
-                    macros.fiber_g,
-                    confidence.value,
-                    warning_code.value if warning_code else None,
-                    warning_detail,
-                    item_id,
-                    log_id,
-                ),
+                tuple(params),
             )
 
             async with conn.execute(
@@ -317,6 +325,70 @@ class MealRepository:
                 agg = await cursor.fetchone()
 
             if agg is not None:
+                await conn.execute(
+                    """
+                    UPDATE meal_logs
+                    SET total_kcal = ?, total_protein = ?, total_carbs = ?,
+                        total_fat = ?, total_fiber = ?
+                    WHERE log_id = ? AND person_id = ?
+                    """,
+                    (
+                        round(float(agg["kcal"]), 1),
+                        round(float(agg["protein"]), 1),
+                        round(float(agg["carbs"]), 1),
+                        round(float(agg["fat"]), 1),
+                        round(float(agg["fiber"]), 1) if agg["fiber"] is not None else None,
+                        log_id,
+                        person_id,
+                    ),
+                )
+
+        return await self.get_meal_log(log_id)
+
+    async def delete_meal_item(
+        self, person_id: str, log_id: str, item_id: str
+    ) -> MealLog | None:
+        """Delete one item from a meal log and recalculate (or soft-delete empty parent)."""
+        existing = await self.get_meal_log(log_id)
+        if existing is None or existing.person_id != person_id:
+            return None
+
+        async with self._db.transaction() as conn:
+            cursor = await conn.execute(
+                "DELETE FROM meal_log_items WHERE item_id = ? AND log_id = ?",
+                (item_id, log_id),
+            )
+            if cursor.rowcount <= 0:
+                return None
+
+            async with conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS cnt,
+                    COALESCE(SUM(kcal), 0) AS kcal,
+                    COALESCE(SUM(protein), 0) AS protein,
+                    COALESCE(SUM(carbs), 0) AS carbs,
+                    COALESCE(SUM(fat), 0) AS fat,
+                    SUM(fiber) AS fiber
+                FROM meal_log_items
+                WHERE log_id = ?
+                """,
+                (log_id,),
+            ) as agg_cur:
+                agg = await agg_cur.fetchone()
+
+            rem_cnt = int(agg["cnt"]) if agg is not None else 0
+            if rem_cnt == 0:
+                await conn.execute(
+                    """
+                    UPDATE meal_logs
+                    SET status = ?, total_kcal = 0, total_protein = 0,
+                        total_carbs = 0, total_fat = 0, total_fiber = NULL
+                    WHERE log_id = ? AND person_id = ?
+                    """,
+                    (MealStatus.DELETED.value, log_id, person_id),
+                )
+            elif agg is not None:
                 await conn.execute(
                     """
                     UPDATE meal_logs
