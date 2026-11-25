@@ -25,6 +25,7 @@ from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     default_slots_for_language,
+    slot_approx_minutes,
 )
 
 
@@ -273,3 +274,38 @@ def test_compute_smart_slot_budget_and_main_meal_bounds() -> None:
     assert chicken_out.grams >= 90.0
     assert pasta_out.course == "Primo"
     assert chicken_out.course == "Secondo"
+
+
+def test_semantic_six_slot_allocation_and_slot_times() -> None:
+    """Verify 6-slot Italian profiles allocate larger main-meal budgets and distinct times."""
+    slots6 = [
+        MealSlotConfig(slot_id="col", name="Colazione"),
+        MealSlotConfig(slot_id="sp_m", name="Spuntino"),
+        MealSlotConfig(slot_id="pr", name="Pranzo"),
+        MealSlotConfig(slot_id="mer", name="Merenda"),
+        MealSlotConfig(slot_id="cen", name="Cena"),
+        MealSlotConfig(slot_id="sp_s", name="Spuntino Serale"),
+    ]
+    mins = [slot_approx_minutes(s, all_slots=slots6) for s in slots6]
+    assert mins == [8 * 60, 10 * 60 + 30, 13 * 60, 16 * 60 + 30, 20 * 60, 22 * 60]
+
+    daily = TargetResult(
+        target_kcal=2160.0,
+        protein_g=155.0,
+        carbs_g=240.0,
+        fat_g=64.0,
+        fiber_g=30.0,
+        mode=TargetMode.PHYSIOLOGY,
+    )
+    alloc = allocate_slot_targets(daily, slots6)
+    assert alloc["Pranzo"].kcal >= 600.0
+    assert alloc["Cena"].kcal >= 550.0
+    for snack_name in ("Spuntino", "Merenda", "Spuntino Serale"):
+        assert alloc[snack_name].kcal < 250.0
+        assert alloc[snack_name].protein_g < 16.0
+
+    assert sum(m.kcal for m in alloc.values()) == pytest.approx(2160.0, abs=0.5)
+    assert sum(m.protein_g for m in alloc.values()) == pytest.approx(155.0, abs=0.5)
+    assert sum(m.carbs_g for m in alloc.values()) == pytest.approx(240.0, abs=0.5)
+    assert sum(m.fat_g for m in alloc.values()) == pytest.approx(64.0, abs=0.5)
+    assert sum((m.fiber_g or 0.0) for m in alloc.values()) == pytest.approx(30.0, abs=0.5)

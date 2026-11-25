@@ -60,6 +60,25 @@ class PersonDashboardState:
     meals: list[MealLog]
     planned_today: list[MealPlanItem]
     latest_weight_kg: float | None = None
+    weight_source: str = "initial"
+    weight_entity_id: str | None = None
+    weight_entity_name: str | None = None
+    weight_sensor_available: bool = False
+    body_fat_source: str = "none"
+    body_fat_entity_id: str | None = None
+    body_fat_entity_name: str | None = None
+    body_fat_sensor_available: bool = False
+
+
+def _entity_friendly_name(hass: HomeAssistant, entity_id: str | None) -> str | None:
+    if not entity_id:
+        return None
+    st = hass.states.get(entity_id)
+    if st is not None:
+        fname = st.attributes.get("friendly_name")
+        if isinstance(fname, str) and fname.strip():
+            return fname.strip()
+    return entity_id
 
 
 def _parse_numeric_state(state: State | None) -> tuple[float | None, str]:
@@ -209,24 +228,28 @@ class PersonNutritionCoordinator(DataUpdateCoordinator[PersonDashboardState]):
         live_total = _read_energy_kcal(self.hass, mappings.total_kcal_entity)
         live_steps = _read_steps(self.hass, mappings.steps_entity)
 
-        weight_kg = (
-            live_weight
-            if live_weight is not None
-            else (
-                latest_snap.weight_kg
-                if latest_snap and latest_snap.weight_kg is not None
-                else self.profile.initial_weight_kg
-            )
-        )
-        body_fat_pct = (
-            live_bf
-            if live_bf is not None
-            else (
-                latest_snap.body_fat_pct
-                if latest_snap and latest_snap.body_fat_pct is not None
-                else self.profile.body_fat_pct
-            )
-        )
+        if live_weight is not None:
+            weight_kg = live_weight
+            weight_source = "sensor"
+        elif latest_snap and latest_snap.weight_kg is not None:
+            weight_kg = latest_snap.weight_kg
+            weight_source = "snapshot"
+        else:
+            weight_kg = self.profile.initial_weight_kg
+            weight_source = "initial"
+
+        if live_bf is not None:
+            body_fat_pct = live_bf
+            body_fat_source = "sensor"
+        elif latest_snap and latest_snap.body_fat_pct is not None:
+            body_fat_pct = latest_snap.body_fat_pct
+            body_fat_source = "snapshot"
+        elif self.profile.body_fat_pct is not None:
+            body_fat_pct = self.profile.body_fat_pct
+            body_fat_source = "profile"
+        else:
+            body_fat_pct = None
+            body_fat_source = "none"
 
         age_years = max(10, today.year - self.profile.birth_year)
         bmr_kcal, bmr_formula = calculate_bmr(
@@ -288,6 +311,16 @@ class PersonNutritionCoordinator(DataUpdateCoordinator[PersonDashboardState]):
             meals=meals,
             planned_today=[item for _, item in planned_pairs],
             latest_weight_kg=weight_kg,
+            weight_source=weight_source,
+            weight_entity_id=mappings.weight_entity or None,
+            weight_entity_name=_entity_friendly_name(self.hass, mappings.weight_entity),
+            weight_sensor_available=(live_weight is not None),
+            body_fat_source=body_fat_source,
+            body_fat_entity_id=mappings.body_fat_entity or None,
+            body_fat_entity_name=_entity_friendly_name(
+                self.hass, mappings.body_fat_entity
+            ),
+            body_fat_sensor_available=(live_bf is not None),
         )
 
     async def async_persist_today_snapshot(

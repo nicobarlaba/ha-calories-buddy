@@ -17,16 +17,20 @@ from custom_components.ha_calories_buddy.const import CONF_PERSON_ID, DOMAIN, VE
 from custom_components.ha_calories_buddy.coordinator import PersonNutritionCoordinator
 from custom_components.ha_calories_buddy.core.models import (
     MealLog,
+    MealLogItem,
     MealPlanItem,
     MealSlotConfig,
     MealStatus,
     PlanItemStatus,
     PlannedIngredient,
+    PreparationState,
 )
+from custom_components.ha_calories_buddy.core.nutrition.calculator import sum_macros
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     resolve_meal_slot,
     slot_approx_minutes,
 )
+from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
 from custom_components.ha_calories_buddy.runtime import DomainRuntime
 
 CALENDAR_COLOR_PALETTE = [
@@ -54,12 +58,50 @@ def _slot_anchor_datetime(
     resolved_name = resolve_meal_slot(slot_name, meal_slots, language=language)
     matched = next((s for s in meal_slots if s.name == resolved_name), None)
     mins = (
-        slot_approx_minutes(matched)
+        slot_approx_minutes(matched, all_slots=meal_slots)
         if matched is not None
-        else slot_approx_minutes(MealSlotConfig(slot_id="tmp", name=resolved_name))
+        else slot_approx_minutes(
+            MealSlotConfig(slot_id="tmp", name=resolved_name), all_slots=meal_slots
+        )
     )
     tz = dt_util.get_default_time_zone()
     return datetime.combine(target_date, time(hour=mins // 60, minute=mins % 60), tzinfo=tz)
+
+
+def _format_meal_group_event(
+    *,
+    local_start: datetime,
+    prefix: str,
+    meal_slot: str,
+    kcal: float,
+    items: list[MealLogItem],
+    uid: str,
+) -> CalendarEvent:
+    local_end = local_start + timedelta(minutes=30)
+    item_names = ", ".join(item.display_name for item in items[:3])
+    if len(items) > 3:
+        item_names += f" (+{len(items) - 3})"
+
+    summary = f"{prefix} [{meal_slot}] {round(kcal)} kcal"
+    if item_names:
+        summary = f"{summary} — {item_names}"
+
+    lines = [
+        (
+            f"- {i.display_name}: {i.input_quantity:g} {i.input_unit} "
+            f"({round(i.macros.kcal)} kcal | P {i.macros.protein_g:.1f}g "
+            f"C {i.macros.carbs_g:.1f}g F {i.macros.fat_g:.1f}g "
+            f"Fib {(i.macros.fiber_g or 0.0):.1f}g)"
+        )
+        for i in items
+    ]
+    return CalendarEvent(
+        start=local_start,
+        end=local_end,
+        summary=summary,
+        description="\n".join(lines),
+        uid=uid,
+    )
 
 
 def _meal_to_calendar_event(
@@ -79,30 +121,13 @@ def _meal_to_calendar_event(
     else:
         local_start = local_logged
 
-    local_end = local_start + timedelta(minutes=30)
     prefix = "⚠️" if meal.status == MealStatus.PENDING_CONFIRMATION else "🍽️"
-    item_names = ", ".join(item.display_name for item in meal.items[:3])
-    if len(meal.items) > 3:
-        item_names += f" (+{len(meal.items) - 3})"
-
-    summary = f"{prefix} [{meal.meal_slot}] {round(meal.total_macros.kcal)} kcal"
-    if item_names:
-        summary = f"{summary} — {item_names}"
-
-    lines = [
-        (
-            f"- {i.display_name}: {i.input_quantity:g} {i.input_unit} "
-            f"({round(i.macros.kcal)} kcal | P {i.macros.protein_g:.1f}g "
-            f"C {i.macros.carbs_g:.1f}g F {i.macros.fat_g:.1f}g "
-            f"Fib {(i.macros.fiber_g or 0.0):.1f}g)"
-        )
-        for i in meal.items
-    ]
-    return CalendarEvent(
-        start=local_start,
-        end=local_end,
-        summary=summary,
-        description="\n".join(lines),
+    return _format_meal_group_event(
+        local_start=local_start,
+        prefix=prefix,
+        meal_slot=meal.meal_slot,
+        kcal=meal.total_macros.kcal,
+        items=meal.items,
         uid=meal.log_id,
     )
 
@@ -127,7 +152,16 @@ def _planned_to_calendar_event(
         raw_ings = json.loads(item.ingredients_json or "[]")
         for raw in raw_ings:
             ing = PlannedIngredient.model_validate(raw)
-            desc_lines.append(f"- {ing.name}: {ing.grams:g} g")
+            state_hint = ""
+            if ing.preparation_state in (PreparationState.RAW, PreparationState.COOKED):
+                lbl = (
+                    ("crudo" if ing.preparation_state == PreparationState.RAW else "cotto")
+                    if language == "it"
+                    else ing.preparation_state.value
+                )
+                if lbl not in ing.name.lower():
+                    state_hint = f" ({lbl})"
+            desc_lines.append(f"- {ing.name}{state_hint}: {ing.grams:g} g")
     except Exception:  # noqa: BLE001
         pass
 
@@ -246,11 +280,39 @@ class CaloriesBuddyCalendarEntity(
 
         events: list[CalendarEvent] = []
         by_day: dict[date, list[MealLog]] = {}
+        confirmed_by_slot: dict[tuple[date, str], list[MealLog]] = {}
         for meal in meals:
-            events.append(
-                _meal_to_calendar_event(meal, profile.meal_slots, profile.language)
-            )
             by_day.setdefault(meal.log_date, []).append(meal)
+            if meal.status == MealStatus.PENDING_CONFIRMATION:
+                events.append(
+                    _meal_to_calendar_event(meal, profile.meal_slots, profile.language)
+                )
+            else:
+                confirmed_by_slot.setdefault((meal.log_date, meal.meal_slot), []).append(meal)
+
+        for (day, meal_slot), group_meals in confirmed_by_slot.items():
+            if len(group_meals) == 1:
+                events.append(
+                    _meal_to_calendar_event(
+                        group_meals[0], profile.meal_slots, profile.language
+                    )
+                )
+                continue
+            combined_items = [item for m in group_meals for item in m.items]
+            group_macros = sum_macros([m.total_macros for m in group_meals])
+            slot_dt = _slot_anchor_datetime(
+                day, meal_slot, profile.meal_slots, profile.language
+            )
+            events.append(
+                _format_meal_group_event(
+                    local_start=slot_dt,
+                    prefix="🍽️",
+                    meal_slot=meal_slot,
+                    kcal=group_macros.kcal,
+                    items=combined_items,
+                    uid=f"slot_{profile.person_id}_{day.isoformat()}_{normalize_text(meal_slot)}",
+                )
+            )
 
         for plan_date, plan_item in planned_items:
             events.append(

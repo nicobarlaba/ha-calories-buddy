@@ -8,6 +8,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from custom_components.ha_calories_buddy.const import (
     CONF_ACTIVE_KCAL_ENTITY,
@@ -35,6 +36,7 @@ from tests.integration.conftest import setup_hub_and_persons
 
 async def test_sensors_unit_conversion_unavailable_fallback_and_calendars(
     hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
 ) -> None:
     """Verify 10 sensors + 1 calendar per person, lb->kg conversion, fallback, fiber, and calendar."""
     hass.states.async_set(
@@ -124,12 +126,30 @@ async def test_sensors_unit_conversion_unavailable_fallback_and_calendars(
     assert tdee_state is not None
     assert tdee_state.attributes["weight_kg"] == pytest.approx(80.0, abs=0.1)
 
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {"id": 1, "type": f"{DOMAIN}/dashboard", "person_id": "person_marco"}
+    )
+    ws_dash1 = await ws_client.receive_json()
+    assert ws_dash1["success"] is True
+    assert ws_dash1["result"]["biometrics"]["weight_entity_id"] == "sensor.marco_scale"
+    assert ws_dash1["result"]["biometrics"]["weight_sensor_available"] is True
+    assert ws_dash1["result"]["biometrics"]["weight_kg"] == pytest.approx(80.0, abs=0.1)
+
     # Persist today's snapshot, then simulate weight sensor becoming unavailable -> retains 80.0 kg!
     runtime: DomainRuntime = hass.data[DOMAIN]
     await runtime.persons["person_marco"].coordinator.async_persist_today_snapshot()
     hass.states.async_set("sensor.marco_scale", "unavailable")
     await runtime.persons["person_marco"].coordinator.async_refresh()
     await hass.async_block_till_done()
+
+    await ws_client.send_json(
+        {"id": 2, "type": f"{DOMAIN}/dashboard", "person_id": "person_marco"}
+    )
+    ws_dash2 = await ws_client.receive_json()
+    assert ws_dash2["success"] is True
+    assert ws_dash2["result"]["biometrics"]["weight_sensor_available"] is False
+    assert ws_dash2["result"]["biometrics"]["weight_source"] == "snapshot"
 
     tdee_after = hass.states.get(marco_tdee_ent)
     assert tdee_after is not None

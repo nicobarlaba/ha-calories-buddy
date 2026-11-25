@@ -1,4 +1,4 @@
-/** HA Calories Buddy Custom Lovelace Card v0.2.4 (Zero-Build Modular ES Web Component) */
+/** HA Calories Buddy Custom Lovelace Card v0.2.5 (Zero-Build Modular ES Web Component) */
 import { CaloriesBuddyApi } from "./api.js";
 import { openBarcodeScannerModal } from "./components/barcode-scanner.js";
 import { t } from "./i18n/index.js";
@@ -50,9 +50,13 @@ class HaCaloriesBuddyCard extends HTMLElement {
       language: "en",
       busy: false,
       error: null,
+      infoToast: null,
       toastLogId: null,
       editingItemId: null,
       editReplacementFood: null,
+      addingToLogId: null,
+      addSelectedFood: null,
+      showManualWeightFallback: false,
       selectedAiSlot: null,
       macroPieMode: null,
     };
@@ -60,6 +64,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
     this._eventUnsub = null;
     this._subscribedConn = null;
     this._refreshTimer = null;
+    this._toastTimer = null;
     this._lastSensorStamp = "";
   }
 
@@ -68,7 +73,22 @@ class HaCaloriesBuddyCard extends HTMLElement {
       clearTimeout(this._refreshTimer);
       this._refreshTimer = null;
     }
+    if (this._toastTimer) {
+      clearTimeout(this._toastTimer);
+      this._toastTimer = null;
+    }
     this._unsubscribeEvents();
+  }
+
+  _showInfoToast(message) {
+    if (this._toastTimer) clearTimeout(this._toastTimer);
+    this._uiState.infoToast = message;
+    this._render();
+    this._toastTimer = setTimeout(() => {
+      this._toastTimer = null;
+      this._uiState.infoToast = null;
+      this._render();
+    }, 4000);
   }
 
   _unsubscribeEvents() {
@@ -316,6 +336,12 @@ class HaCaloriesBuddyCard extends HTMLElement {
         ${this._uiState.error ? `<div class="error-banner">${escapeHtml(this._uiState.error)}</div>` : ""}
 
         ${
+          this._uiState.infoToast
+            ? `<div class="toast success-toast"><span>✅ ${escapeHtml(this._uiState.infoToast)}</span></div>`
+            : ""
+        }
+
+        ${
           this._uiState.toastLogId
             ? `<div class="toast">
                 <span>${escapeHtml(t(lang, "meal_deleted"))}</span>
@@ -370,11 +396,14 @@ class HaCaloriesBuddyCard extends HTMLElement {
     });
 
     this.shadowRoot.querySelector("#undo-delete-btn")?.addEventListener("click", async () => {
-      const logId = this._uiState.toastLogId;
+      const rawToast = this._uiState.toastLogId;
       this._uiState.toastLogId = null;
-      if (logId) {
+      if (rawToast) {
+        const logIds = String(rawToast).split(",").filter(Boolean);
         await this._withBusy(async () => {
-          await this._api.restoreMeal(this._activePersonId, logId);
+          for (const lid of logIds) {
+            await this._api.restoreMeal(this._activePersonId, lid);
+          }
           await this._loadDashboard();
         });
       }
@@ -411,7 +440,10 @@ class HaCaloriesBuddyCard extends HTMLElement {
           onVaultUpdated: async () => {
             if (this._activeTab === "vault") {
               await this._loadVault(this._vaultState.query, this._vaultState.category, this._vaultState.offset);
+            } else {
+              this._vaultState.foods = [];
             }
+            this._showInfoToast(t(this._uiState.language, "saved_global_ok"));
           },
           onLogFood: async (itemPayload) => {
             await this._withBusy(async () => {
@@ -450,26 +482,56 @@ class HaCaloriesBuddyCard extends HTMLElement {
             await this._api.confirmMeal(this._activePersonId, logId, promote);
             await this._loadDashboard();
           }),
-        onDeleteMeal: (logId) =>
+        onDeleteMeal: (logIds) =>
           this._withBusy(async () => {
-            await this._api.deleteMeal(this._activePersonId, logId);
-            this._uiState.toastLogId = logId;
+            const ids = Array.isArray(logIds) ? logIds : [logIds];
+            for (const lid of ids) {
+              await this._api.deleteMeal(this._activePersonId, lid);
+            }
+            this._uiState.toastLogId = ids.join(",");
             await this._loadDashboard();
           }),
-        onUpdateMealSlot: (logId, mealSlot) =>
+        onUpdateMealSlot: (logIds, mealSlot) =>
           this._withBusy(async () => {
-            await this._api.updateMealSlot(this._activePersonId, logId, mealSlot);
+            const ids = Array.isArray(logIds) ? logIds : [logIds];
+            for (const lid of ids) {
+              await this._api.updateMealSlot(this._activePersonId, lid, mealSlot);
+            }
             await this._loadDashboard();
           }),
         onStartEditItem: (itemId) => {
           this._uiState.editingItemId = itemId;
           this._uiState.editReplacementFood = null;
+          if (itemId) {
+            this._uiState.addingToLogId = null;
+            this._uiState.addSelectedFood = null;
+          }
           this._render();
         },
         onSelectEditFood: (food) => {
           this._uiState.editReplacementFood = food || null;
           this._render();
         },
+        onStartAddItem: (logId) => {
+          this._uiState.addingToLogId = logId || null;
+          this._uiState.addSelectedFood = null;
+          if (logId) {
+            this._uiState.editingItemId = null;
+            this._uiState.editReplacementFood = null;
+          }
+          this._render();
+        },
+        onSelectAddFood: (food) => {
+          this._uiState.addSelectedFood = food || null;
+          this._render();
+        },
+        onAddMealItem: (logId, itemPayload) =>
+          this._withBusy(async () => {
+            await this._api.addMealItem(this._activePersonId, logId, itemPayload);
+            this._uiState.addingToLogId = null;
+            this._uiState.addSelectedFood = null;
+            await this._loadDashboard();
+          }),
         onUpdateMealItem: (logId, itemId, qty, unit, state, foodId = null) =>
           this._withBusy(async () => {
             await this._api.updateMealItem(
@@ -522,8 +584,13 @@ class HaCaloriesBuddyCard extends HTMLElement {
         onLogWeight: (weightKg) =>
           this._withBusy(async () => {
             await this._api.logWeight(this._activePersonId, weightKg);
+            this._uiState.showManualWeightFallback = false;
             await this._loadDashboard();
           }),
+        onToggleManualWeightFallback: () => {
+          this._uiState.showManualWeightFallback = !this._uiState.showManualWeightFallback;
+          this._render();
+        },
       });
     } else if (this._activeTab === "plan") {
       renderPlanView(viewHost, this._planState, this._dashboard, this._uiState, {

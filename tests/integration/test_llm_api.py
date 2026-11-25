@@ -162,6 +162,22 @@ async def test_assist_llm_api_tools(hass: HomeAssistant) -> None:
         assert remove_res.data["meal_deleted"] is False
         assert float(remove_res.data["new_meal_kcal"]) < 420.0
 
+        # Add forgotten ingredient to existing meal via Assist correct_last_meal
+        add_res = await api_instance.async_call_tool(
+            llm.ToolInput(
+                tool_name="correct_last_meal",
+                tool_args={
+                    "add_food_name": "Olio Extravergine di Oliva",
+                    "add_quantity": 10,
+                    "add_unit": "g",
+                    "add_state": "ready_to_eat",
+                },
+            )
+        )
+        assert add_res.error is False
+        assert add_res.data["added"] is True
+        assert float(add_res.data["new_meal_kcal"]) > float(remove_res.data["new_meal_kcal"]) + 70.0
+
         # Query today summary including fiber metrics
         summary_res = await api_instance.async_call_tool(
             llm.ToolInput(tool_name="get_today_nutrition_summary", tool_args={})
@@ -169,7 +185,7 @@ async def test_assist_llm_api_tools(hass: HomeAssistant) -> None:
         assert summary_res.error is False
         assert summary_res.data["person"] == "Marco"
         assert summary_res.data["consumed_kcal"] == pytest.approx(
-            float(remove_res.data["new_meal_kcal"]), abs=1.0
+            float(add_res.data["new_meal_kcal"]), abs=1.0
         )
         assert float(summary_res.data["fiber_consumed_g"]) > 0.0
         assert float(summary_res.data["fiber_target_g"]) >= 20.0

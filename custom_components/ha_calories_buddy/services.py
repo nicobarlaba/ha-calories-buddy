@@ -198,6 +198,31 @@ def async_register_services(hass: HomeAssistant) -> None:
         await _refresh_person(hass, profile.person_id)
         return {"meal_log": confirmed.model_dump(mode="json")}
 
+    async def handle_add_meal_item(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        raw_state = str(call.data.get(ATTR_STATE, PreparationState.UNSPECIFIED.value))
+        state = (
+            PreparationState(raw_state)
+            if raw_state in ("raw", "cooked", "ready_to_eat", "unspecified")
+            else PreparationState.UNSPECIFIED
+        )
+        updated = await runtime.logging_service.add_item_to_meal(
+            profile,
+            str(call.data[ATTR_LOG_ID]),
+            food_id=call.data.get(ATTR_FOOD_ID) or None,
+            barcode=call.data.get(ATTR_BARCODE) or None,
+            name=str(call.data.get("name") or ""),
+            brand=call.data.get("brand") or None,
+            quantity=float(call.data[ATTR_QUANTITY]),
+            unit=str(call.data.get(ATTR_UNIT, "g")),
+            state=state,
+        )
+        if updated is None:
+            raise HomeAssistantError("Meal log not found")
+        await _refresh_person(hass, profile.person_id, "service_add_meal_item")
+        return {"meal_log": updated.model_dump(mode="json")}
+
     async def handle_update_meal_item(call: ServiceCall) -> dict[str, Any]:
         runtime: DomainRuntime = hass.data[DOMAIN]
         profile = _resolve_target_person(hass, call)
@@ -461,6 +486,25 @@ def async_register_services(hass: HomeAssistant) -> None:
             {
                 vol.Required(ATTR_LOG_ID): cv.string,
                 vol.Optional("promote_to_vault", default=False): cv.boolean,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "add_meal_item",
+        handle_add_meal_item,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_LOG_ID): cv.string,
+                vol.Optional(ATTR_FOOD_ID): cv.string,
+                vol.Optional(ATTR_BARCODE): cv.string,
+                vol.Optional("name"): cv.string,
+                vol.Optional("brand"): cv.string,
+                vol.Required(ATTR_QUANTITY): vol.Coerce(float),
+                vol.Optional(ATTR_UNIT, default="g"): cv.string,
+                vol.Optional(ATTR_STATE, default="unspecified"): cv.string,
                 vol.Optional(ATTR_PERSON): cv.string,
             }
         ),

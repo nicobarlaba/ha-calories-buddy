@@ -34,22 +34,24 @@ _CANONICAL_GROUPS: dict[str, tuple[str, ...]] = {
     "snack": (
         "snack",
         "spuntino",
-        "spuntino serale",
-        "spuntino notturno",
-        "dopocena",
-        "dopo cena",
         "merenda",
         "afternoon snack",
-        "evening snack",
-        "night snack",
-        "late snack",
-        "bedtime snack",
-        "after dinner",
         "spuntino pomeridiano",
         "pre workout",
         "post workout",
     ),
     "dinner": ("dinner", "cena", "supper", "evening"),
+    "evening_snack": (
+        "spuntino serale",
+        "spuntino notturno",
+        "dopocena",
+        "dopo cena",
+        "evening snack",
+        "night snack",
+        "late snack",
+        "bedtime snack",
+        "after dinner",
+    ),
 }
 
 _SYNONYM_TO_GROUP: dict[str, str] = {
@@ -76,7 +78,13 @@ _DEFAULT_SLOT_TIMES: dict[str, int] = {
     "lunch": 13 * 60,
     "snack": 16 * 60 + 30,
     "dinner": 20 * 60,
+    "evening_snack": 22 * 60,
 }
+
+
+def is_sweet_default_slot_group(group: str) -> bool:
+    """Return True when a slot group defaults to sweet/light snacks or breakfast."""
+    return group in {"breakfast", "morning_snack", "snack", "evening_snack"}
 
 
 def canonical_slot_group(slot_name: str) -> str:
@@ -129,7 +137,57 @@ def default_slots_for_language(language: str) -> list[MealSlotConfig]:
     ]
 
 
-def slot_approx_minutes(slot: MealSlotConfig) -> int:
+def effective_slot_group(
+    slot: MealSlotConfig,
+    all_slots: list[MealSlotConfig] | None = None,
+) -> str:
+    """Resolve a slot's culinary group, disambiguating morning vs afternoon snacks."""
+    group = canonical_slot_group(slot.name)
+    if group != "snack" or not all_slots:
+        return group
+
+    snack_indices = [
+        idx
+        for idx, candidate in enumerate(all_slots)
+        if canonical_slot_group(candidate.name) == "snack"
+    ]
+    if len(snack_indices) < 2:
+        return group
+
+    norm_name = normalize_text(slot.name)
+    cur_idx = next(
+        (idx for idx, s in enumerate(all_slots) if s.slot_id == slot.slot_id and s.name == slot.name),
+        snack_indices[0],
+    )
+    lunch_idx = next(
+        (idx for idx, s in enumerate(all_slots) if canonical_slot_group(s.name) == "lunch"),
+        None,
+    )
+    has_explicit_afternoon = any(
+        "merenda" in normalize_text(all_slots[idx].name)
+        or "afternoon" in normalize_text(all_slots[idx].name)
+        or "pomerid" in normalize_text(all_slots[idx].name)
+        for idx in snack_indices
+    )
+    if lunch_idx is not None and cur_idx < lunch_idx:
+        return "morning_snack"
+    if (
+        has_explicit_afternoon
+        and "merenda" not in norm_name
+        and "afternoon" not in norm_name
+        and "pomerid" not in norm_name
+        and cur_idx == snack_indices[0]
+    ):
+        return "morning_snack"
+    if lunch_idx is None and not has_explicit_afternoon and cur_idx == snack_indices[0]:
+        return "morning_snack"
+    return group
+
+
+def slot_approx_minutes(
+    slot: MealSlotConfig,
+    all_slots: list[MealSlotConfig] | None = None,
+) -> int:
     """Resolve approximate time-of-day in minutes for a configured meal slot."""
     parsed = parse_hhmm_minutes(slot.approx_time)
     if parsed is not None and slot.approx_time != "12:30":
@@ -137,7 +195,7 @@ def slot_approx_minutes(slot: MealSlotConfig) -> int:
     norm_name = normalize_text(slot.name)
     if any(phrase in norm_name for phrase in _EVENING_SNACK_PHRASES):
         return 22 * 60
-    group = canonical_slot_group(slot.name)
+    group = effective_slot_group(slot, all_slots)
     if group in _DEFAULT_SLOT_TIMES:
         return _DEFAULT_SLOT_TIMES[group]
     return parsed if parsed is not None else 13 * 60
@@ -188,19 +246,20 @@ def resolve_meal_slot(
     # 2. Canonical EN <-> IT synonym mapping onto configured slots
     raw_group = _SYNONYM_TO_GROUP.get(norm_raw)
     if raw_group is None:
-        for alias, grp in _SYNONYM_TO_GROUP.items():
+        for alias, grp in sorted(
+            _SYNONYM_TO_GROUP.items(), key=lambda pair: len(pair[0]), reverse=True
+        ):
             if alias in norm_raw:
                 raw_group = grp
                 break
 
     if raw_group is not None:
         for slot in slots:
-            slot_group = _SYNONYM_TO_GROUP.get(normalize_text(slot.name))
-            if slot_group == raw_group:
+            if canonical_slot_group(slot.name) == raw_group:
                 return slot.name
-        if raw_group == "morning_snack":
+        if raw_group in ("morning_snack", "evening_snack"):
             for slot in slots:
-                if _SYNONYM_TO_GROUP.get(normalize_text(slot.name)) == "snack":
+                if canonical_slot_group(slot.name) == "snack":
                     return slot.name
 
     # 3. Partial token match on configured slots

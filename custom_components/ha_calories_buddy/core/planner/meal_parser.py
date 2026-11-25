@@ -204,6 +204,7 @@ class MealLoggingService:
         meal_slot: str | None = None,
         log_date: date | None = None,
         source_channel: str = "manual",
+        merge_existing_slot: bool = True,
     ) -> LogMealResult:
         """Log a single food deterministically without requiring any LLM."""
         resolved = await self._resolver.resolve_item(
@@ -222,14 +223,100 @@ class MealLoggingService:
             profile.meal_slots,
             language=profile.language,
         )
+        target_date = log_date or date.today()
+        needs_conf = (
+            resolved.confidence != ConfidenceLevel.HIGH
+            or resolved.warning_code is not None
+        )
+        if merge_existing_slot and not needs_conf:
+            existing = await self._meal_repo.find_active_meal_for_slot(
+                profile.person_id,
+                target_date,
+                chosen_slot,
+                status=MealStatus.CONFIRMED,
+            )
+            if existing is not None:
+                merged_item = self._resolved_to_db_item(existing.log_id, resolved)
+                updated_log = await self._meal_repo.add_meal_item(
+                    profile.person_id, existing.log_id, merged_item
+                )
+                if updated_log is not None:
+                    log_event(
+                        _LOGGER,
+                        logging.INFO,
+                        "meal_item_merged_into_slot",
+                        person_id=profile.person_id,
+                        meal_slot=chosen_slot,
+                        item_count=len(updated_log.items),
+                    )
+                    return LogMealResult(
+                        meal_log=updated_log,
+                        needs_confirmation=False,
+                        summary_message=self._format_summary_message(
+                            profile.language,
+                            chosen_slot,
+                            updated_log.total_macros,
+                            needs_confirmation=False,
+                        ),
+                        warnings=[],
+                    )
+
         return await self._persist_resolved_meal(
             profile=profile,
             resolved_items=[resolved],
             meal_slot=chosen_slot,
-            log_date=log_date or date.today(),
+            log_date=target_date,
             source_channel=source_channel,
             raw_input_text=None,
         )
+
+    async def add_item_to_meal(
+        self,
+        profile: PersonProfile,
+        log_id: str,
+        *,
+        food_id: str | None = None,
+        barcode: str | None = None,
+        name: str = "",
+        brand: str | None = None,
+        quantity: float = 100.0,
+        unit: str = "g",
+        state: PreparationState = PreparationState.UNSPECIFIED,
+    ) -> MealLog | None:
+        """Resolve one food item and append it to an existing logged meal."""
+        existing = await self._meal_repo.get_meal_log(log_id)
+        if (
+            existing is None
+            or existing.person_id != profile.person_id
+            or existing.status == MealStatus.DELETED
+        ):
+            return None
+
+        resolved = await self._resolver.resolve_item(
+            person_id=profile.person_id,
+            food_id=food_id,
+            barcode=barcode,
+            name=name or "Custom Food",
+            brand=brand,
+            quantity=quantity,
+            unit=unit,
+            state=state,
+            language=profile.language,
+            llm_estimator=None,
+        )
+        new_item = self._resolved_to_db_item(log_id, resolved)
+        updated = await self._meal_repo.add_meal_item(
+            profile.person_id, log_id, new_item
+        )
+        if updated is not None:
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "meal_item_added",
+                person_id=profile.person_id,
+                item_count=len(updated.items),
+            )
+        return updated
 
     async def change_meal_slot(
         self,
@@ -429,6 +516,48 @@ class MealLoggingService:
             warning_detail=target_item.warning_detail,
         )
 
+    @staticmethod
+    def _resolved_to_db_item(
+        log_id: str, item: ResolvedMealItem
+    ) -> MealLogItem:
+        return MealLogItem(
+            item_id=f"item_{uuid.uuid4().hex[:12]}",
+            log_id=log_id,
+            food_id=item.food_id,
+            display_name=item.display_name,
+            brand=item.brand,
+            input_quantity=item.input_quantity,
+            input_unit=item.input_unit,
+            input_state=item.effective_state,
+            resolved_grams_ref=item.resolved_grams_ref,
+            macros=item.macros,
+            confidence=item.confidence,
+            warning_code=item.warning_code,
+            warning_detail=item.warning_detail,
+        )
+
+    @staticmethod
+    def _format_summary_message(
+        language: str,
+        meal_slot: str,
+        total_macros: Macros,
+        *,
+        needs_confirmation: bool,
+    ) -> str:
+        summary_key = (
+            "meal_pending_summary" if needs_confirmation else "meal_confirmed_summary"
+        )
+        return format_message(
+            language,
+            summary_key,
+            slot=meal_slot,
+            kcal=round(total_macros.kcal),
+            p=round(total_macros.protein_g, 1),
+            c=round(total_macros.carbs_g, 1),
+            f=round(total_macros.fat_g, 1),
+            fib=round(total_macros.fiber_g or 0.0, 1),
+        )
+
     async def _persist_resolved_meal(
         self,
         *,
@@ -450,22 +579,7 @@ class MealLoggingService:
             else MealStatus.CONFIRMED
         )
         db_items = [
-            MealLogItem(
-                item_id=f"item_{uuid.uuid4().hex[:12]}",
-                log_id=log_id,
-                food_id=item.food_id,
-                display_name=item.display_name,
-                brand=item.brand,
-                input_quantity=item.input_quantity,
-                input_unit=item.input_unit,
-                input_state=item.effective_state,
-                resolved_grams_ref=item.resolved_grams_ref,
-                macros=item.macros,
-                confidence=item.confidence,
-                warning_code=item.warning_code,
-                warning_detail=item.warning_detail,
-            )
-            for item in resolved_items
+            self._resolved_to_db_item(log_id, item) for item in resolved_items
         ]
         total_macros = sum_macros([i.macros for i in db_items])
         meal_log = MealLog(
@@ -490,18 +604,11 @@ class MealLoggingService:
             item_count=len(db_items),
         )
 
-        summary_key = (
-            "meal_pending_summary" if needs_confirmation else "meal_confirmed_summary"
-        )
-        summary = format_message(
+        summary = self._format_summary_message(
             profile.language,
-            summary_key,
-            slot=meal_slot,
-            kcal=round(total_macros.kcal),
-            p=round(total_macros.protein_g, 1),
-            c=round(total_macros.carbs_g, 1),
-            f=round(total_macros.fat_g, 1),
-            fib=round(total_macros.fiber_g or 0.0, 1),
+            meal_slot,
+            total_macros,
+            needs_confirmation=needs_confirmation,
         )
         warnings = self._build_warning_messages(profile.language, resolved_items)
         return LogMealResult(

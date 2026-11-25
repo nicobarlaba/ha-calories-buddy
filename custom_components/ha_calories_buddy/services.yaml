@@ -132,6 +132,59 @@ update_meal_item:
       selector:
         text:
 
+add_meal_item:
+  name: Add Ingredient to Logged Meal
+  description: Resolve a food item and append it to an already logged meal, recalculating parent totals.
+  fields:
+    log_id:
+      name: Meal Log ID
+      required: true
+      selector:
+        text:
+    food_id:
+      name: Food ID (optional)
+      selector:
+        text:
+    barcode:
+      name: Barcode EAN/UPC (optional)
+      selector:
+        text:
+    name:
+      name: Food Name (optional if food_id or barcode set)
+      selector:
+        text:
+    brand:
+      name: Brand (optional)
+      selector:
+        text:
+    quantity:
+      name: Quantity
+      required: true
+      selector:
+        number:
+          min: 0.1
+          max: 5000
+          step: 0.5
+    unit:
+      name: Unit
+      default: g
+      selector:
+        text:
+    state:
+      name: Preparation State
+      default: unspecified
+      selector:
+        select:
+          options:
+            - unspecified
+            - raw
+            - cooked
+            - ready_to_eat
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
 delete_meal_item:
   name: Remove Meal Item
   description: Remove a single ingredient from a logged meal and recalculate totals (or delete parent meal if empty).

@@ -308,42 +308,80 @@ class MealRepository:
                 """,
                 tuple(params),
             )
-
-            async with conn.execute(
-                """
-                SELECT
-                    COALESCE(SUM(kcal), 0) AS kcal,
-                    COALESCE(SUM(protein), 0) AS protein,
-                    COALESCE(SUM(carbs), 0) AS carbs,
-                    COALESCE(SUM(fat), 0) AS fat,
-                    SUM(fiber) AS fiber
-                FROM meal_log_items
-                WHERE log_id = ?
-                """,
-                (log_id,),
-            ) as cursor:
-                agg = await cursor.fetchone()
-
-            if agg is not None:
-                await conn.execute(
-                    """
-                    UPDATE meal_logs
-                    SET total_kcal = ?, total_protein = ?, total_carbs = ?,
-                        total_fat = ?, total_fiber = ?
-                    WHERE log_id = ? AND person_id = ?
-                    """,
-                    (
-                        round(float(agg["kcal"]), 1),
-                        round(float(agg["protein"]), 1),
-                        round(float(agg["carbs"]), 1),
-                        round(float(agg["fat"]), 1),
-                        round(float(agg["fiber"]), 1) if agg["fiber"] is not None else None,
-                        log_id,
-                        person_id,
-                    ),
-                )
+            await self._recalculate_meal_totals(conn, person_id, log_id)
 
         return await self.get_meal_log(log_id)
+
+    async def add_meal_item(
+        self, person_id: str, log_id: str, item: MealLogItem
+    ) -> MealLog | None:
+        """Append one item to an existing non-deleted meal log and recalculate totals."""
+        async with self._db.transaction() as conn:
+            async with conn.execute(
+                """
+                SELECT log_id FROM meal_logs
+                WHERE log_id = ? AND person_id = ? AND status != ?
+                """,
+                (log_id, person_id, MealStatus.DELETED.value),
+            ) as check_cur:
+                row = await check_cur.fetchone()
+            if row is None:
+                return None
+
+            await conn.execute(
+                """
+                INSERT INTO meal_log_items (
+                    item_id, log_id, food_id, display_name, brand,
+                    input_quantity, input_unit, input_state,
+                    resolved_grams_ref, kcal, protein, carbs, fat, fiber,
+                    confidence, warning_code, warning_detail
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item.item_id,
+                    log_id,
+                    item.food_id,
+                    item.display_name,
+                    item.brand,
+                    item.input_quantity,
+                    item.input_unit,
+                    item.input_state.value,
+                    item.resolved_grams_ref,
+                    item.macros.kcal,
+                    item.macros.protein_g,
+                    item.macros.carbs_g,
+                    item.macros.fat_g,
+                    item.macros.fiber_g,
+                    item.confidence.value,
+                    item.warning_code.value if item.warning_code else None,
+                    item.warning_detail,
+                ),
+            )
+            await self._recalculate_meal_totals(conn, person_id, log_id)
+
+        return await self.get_meal_log(log_id)
+
+    async def find_active_meal_for_slot(
+        self,
+        person_id: str,
+        log_date: date,
+        meal_slot: str,
+        *,
+        status: MealStatus = MealStatus.CONFIRMED,
+    ) -> MealLog | None:
+        """Return the latest non-deleted meal log for a given date, slot, and status."""
+        row = await self._db.fetch_one(
+            """
+            SELECT log_id FROM meal_logs
+            WHERE person_id = ? AND log_date = ? AND meal_slot = ? AND status = ?
+            ORDER BY logged_at DESC
+            LIMIT 1
+            """,
+            (person_id, log_date.isoformat(), meal_slot, status.value),
+        )
+        if row is None:
+            return None
+        return await self.get_meal_log(str(row["log_id"]))
 
     async def delete_meal_item(
         self, person_id: str, log_id: str, item_id: str
@@ -360,54 +398,67 @@ class MealRepository:
             )
             if cursor.rowcount <= 0:
                 return None
-
-            async with conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS cnt,
-                    COALESCE(SUM(kcal), 0) AS kcal,
-                    COALESCE(SUM(protein), 0) AS protein,
-                    COALESCE(SUM(carbs), 0) AS carbs,
-                    COALESCE(SUM(fat), 0) AS fat,
-                    SUM(fiber) AS fiber
-                FROM meal_log_items
-                WHERE log_id = ?
-                """,
-                (log_id,),
-            ) as agg_cur:
-                agg = await agg_cur.fetchone()
-
-            rem_cnt = int(agg["cnt"]) if agg is not None else 0
-            if rem_cnt == 0:
-                await conn.execute(
-                    """
-                    UPDATE meal_logs
-                    SET status = ?, total_kcal = 0, total_protein = 0,
-                        total_carbs = 0, total_fat = 0, total_fiber = NULL
-                    WHERE log_id = ? AND person_id = ?
-                    """,
-                    (MealStatus.DELETED.value, log_id, person_id),
-                )
-            elif agg is not None:
-                await conn.execute(
-                    """
-                    UPDATE meal_logs
-                    SET total_kcal = ?, total_protein = ?, total_carbs = ?,
-                        total_fat = ?, total_fiber = ?
-                    WHERE log_id = ? AND person_id = ?
-                    """,
-                    (
-                        round(float(agg["kcal"]), 1),
-                        round(float(agg["protein"]), 1),
-                        round(float(agg["carbs"]), 1),
-                        round(float(agg["fat"]), 1),
-                        round(float(agg["fiber"]), 1) if agg["fiber"] is not None else None,
-                        log_id,
-                        person_id,
-                    ),
-                )
+            await self._recalculate_meal_totals(
+                conn, person_id, log_id, soft_delete_if_empty=True
+            )
 
         return await self.get_meal_log(log_id)
+
+    @staticmethod
+    async def _recalculate_meal_totals(
+        conn: Any,
+        person_id: str,
+        log_id: str,
+        *,
+        soft_delete_if_empty: bool = False,
+    ) -> int:
+        """Recompute parent meal_logs macro totals from its remaining items."""
+        async with conn.execute(
+            """
+            SELECT
+                COUNT(*) AS cnt,
+                COALESCE(SUM(kcal), 0) AS kcal,
+                COALESCE(SUM(protein), 0) AS protein,
+                COALESCE(SUM(carbs), 0) AS carbs,
+                COALESCE(SUM(fat), 0) AS fat,
+                SUM(fiber) AS fiber
+            FROM meal_log_items
+            WHERE log_id = ?
+            """,
+            (log_id,),
+        ) as agg_cur:
+            agg = await agg_cur.fetchone()
+
+        rem_cnt = int(agg["cnt"]) if agg is not None else 0
+        if rem_cnt == 0 and soft_delete_if_empty:
+            await conn.execute(
+                """
+                UPDATE meal_logs
+                SET status = ?, total_kcal = 0, total_protein = 0,
+                    total_carbs = 0, total_fat = 0, total_fiber = NULL
+                WHERE log_id = ? AND person_id = ?
+                """,
+                (MealStatus.DELETED.value, log_id, person_id),
+            )
+        elif agg is not None:
+            await conn.execute(
+                """
+                UPDATE meal_logs
+                SET total_kcal = ?, total_protein = ?, total_carbs = ?,
+                    total_fat = ?, total_fiber = ?
+                WHERE log_id = ? AND person_id = ?
+                """,
+                (
+                    round(float(agg["kcal"]), 1),
+                    round(float(agg["protein"]), 1),
+                    round(float(agg["carbs"]), 1),
+                    round(float(agg["fat"]), 1),
+                    round(float(agg["fiber"]), 1) if agg["fiber"] is not None else None,
+                    log_id,
+                    person_id,
+                ),
+            )
+        return rem_cnt
 
     async def soft_delete_meal(self, person_id: str, log_id: str) -> bool:
         """Mark a meal log as deleted (preserving undo capability)."""

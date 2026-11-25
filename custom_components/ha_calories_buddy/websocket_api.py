@@ -145,6 +145,17 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         )
         planned_today = [item for _, item in planned_pairs]
 
+        lean_mass_kg = (
+            round(state.weight_kg * (1.0 - state.body_fat_pct / 100.0), 1)
+            if state.body_fat_pct is not None and state.weight_kg > 0
+            else None
+        )
+        fat_mass_kg = (
+            round(state.weight_kg * (state.body_fat_pct / 100.0), 1)
+            if state.body_fat_pct is not None and state.weight_kg > 0
+            else None
+        )
+
         connection.send_result(
             msg["id"],
             {
@@ -157,6 +168,20 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
                 "meals": [m.model_dump(mode="json") for m in meals],
                 "planned_today": [p.model_dump(mode="json") for p in planned_today],
                 "latest_weight_kg": state.latest_weight_kg,
+                "biometrics": {
+                    "weight_kg": state.weight_kg,
+                    "weight_source": state.weight_source,
+                    "weight_entity_id": state.weight_entity_id,
+                    "weight_entity_name": state.weight_entity_name,
+                    "weight_sensor_available": state.weight_sensor_available,
+                    "body_fat_pct": state.body_fat_pct,
+                    "body_fat_source": state.body_fat_source,
+                    "body_fat_entity_id": state.body_fat_entity_id,
+                    "body_fat_entity_name": state.body_fat_entity_name,
+                    "body_fat_sensor_available": state.body_fat_sensor_available,
+                    "lean_mass_kg": lean_mass_kg,
+                    "fat_mass_kg": fat_mass_kg,
+                },
             },
         )
 
@@ -269,6 +294,55 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             connection.send_error(msg["id"], "not_found", "Meal log not found")
             return
         await runtime.async_notify_person_updated(profile.person_id, "ws_confirm_meal")
+        connection.send_result(msg["id"], {"meal_log": meal.model_dump(mode="json")})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/add_meal_item",
+            vol.Required("log_id"): str,
+            vol.Optional("food_id"): vol.Any(str, None),
+            vol.Optional("barcode"): vol.Any(str, None),
+            vol.Optional("name"): vol.Any(str, None),
+            vol.Optional("brand"): vol.Any(str, None),
+            vol.Required("quantity"): vol.Coerce(float),
+            vol.Optional("unit", default="g"): str,
+            vol.Optional("state", default="unspecified"): str,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_add_meal_item(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        state_val = str(msg.get("state") or PreparationState.UNSPECIFIED.value)
+        state = (
+            PreparationState(state_val)
+            if state_val in ("raw", "cooked", "ready_to_eat", "unspecified")
+            else PreparationState.UNSPECIFIED
+        )
+        meal = await runtime.logging_service.add_item_to_meal(
+            profile,
+            str(msg["log_id"]),
+            food_id=msg.get("food_id") or None,
+            barcode=msg.get("barcode") or None,
+            name=str(msg.get("name") or ""),
+            brand=msg.get("brand") or None,
+            quantity=float(msg["quantity"]),
+            unit=str(msg.get("unit", "g")),
+            state=state,
+        )
+        if meal is None:
+            connection.send_error(msg["id"], "not_found", "Meal log not found")
+            return
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_add_meal_item"
+        )
         connection.send_result(msg["id"], {"meal_log": meal.model_dump(mode="json")})
 
     @websocket_command(
@@ -1065,6 +1139,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         ws_log_text,
         ws_log_item,
         ws_confirm_meal,
+        ws_add_meal_item,
         ws_update_meal_item,
         ws_delete_meal_item,
         ws_update_meal_slot,

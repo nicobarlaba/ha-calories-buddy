@@ -234,7 +234,7 @@ async def test_services_and_websocket_multi_user_isolation(
     assert msg8["result"]["snapshot"]["weight_kg"] == pytest.approx(78.4)
     assert "super-secret-do-not-leak" not in json.dumps(msg8)
 
-    # 5. WS update_meal_item with Vault food replacement + WS/service delete_meal_item
+    # 5. WS update_meal_item with Vault food replacement + WS/service add & delete_meal_item
     await client.send_json(
         {
             "id": 73,
@@ -243,7 +243,7 @@ async def test_services_and_websocket_multi_user_isolation(
             "quantity": 10,
             "unit": "g",
             "state": "ready_to_eat",
-            "meal_slot": "Cena",
+            "meal_slot": "Spuntino",
         }
     )
     msg73 = await client.receive_json()
@@ -318,3 +318,64 @@ async def test_services_and_websocket_multi_user_isolation(
     assert del_svc is not None
     assert del_svc["meal_deleted"] is True
     assert del_svc["meal_log"]["status"] == "deleted"
+
+    # 6. Add forgotten ingredient via WS add_meal_item, HA service add_meal_item & same-slot merge
+    await client.send_json(
+        {
+            "id": 77,
+            "type": f"{DOMAIN}/add_meal_item",
+            "log_id": combo_log_id,
+            "food_id": "seed_olive_oil",
+            "quantity": 10,
+            "unit": "g",
+            "state": "ready_to_eat",
+        }
+    )
+    msg77 = await client.receive_json()
+    assert msg77["success"] is True
+    assert len(msg77["result"]["meal_log"]["items"]) == 2
+    kcal_after_ws_add = msg77["result"]["meal_log"]["total_macros"]["kcal"]
+
+    add_svc = await hass.services.async_call(
+        DOMAIN,
+        "add_meal_item",
+        {
+            "log_id": combo_log_id,
+            "food_id": "seed_banana",
+            "quantity": 100,
+            "unit": "g",
+            "state": "ready_to_eat",
+        },
+        context=Context(user_id=hass_admin_user.id),
+        blocking=True,
+        return_response=True,
+    )
+    assert add_svc is not None
+    assert len(add_svc["meal_log"]["items"]) == 3
+    assert add_svc["meal_log"]["total_macros"]["kcal"] > kcal_after_ws_add
+
+    # Manual log_item on an already-confirmed slot merges automatically into that slot's MealLog
+    await client.send_json(
+        {
+            "id": 78,
+            "type": f"{DOMAIN}/log_item",
+            "food_id": "seed_almonds",
+            "quantity": 15,
+            "unit": "g",
+            "state": "ready_to_eat",
+            "meal_slot": "Cena",
+        }
+    )
+    msg78 = await client.receive_json()
+    assert msg78["success"] is True
+    assert msg78["result"]["meal_log"]["log_id"] == combo_log_id
+    assert len(msg78["result"]["meal_log"]["items"]) == 4
+
+    # 7. Dashboard exposes structured biometrics fallback when no sensors are mapped
+    await client.send_json({"id": 79, "type": f"{DOMAIN}/dashboard"})
+    msg79 = await client.receive_json()
+    assert msg79["success"] is True
+    bio = msg79["result"]["biometrics"]
+    assert bio["weight_kg"] == pytest.approx(78.4)
+    assert bio["weight_entity_id"] is None
+    assert bio["weight_sensor_available"] is False

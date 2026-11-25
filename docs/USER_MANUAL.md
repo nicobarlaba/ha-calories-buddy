@@ -1,6 +1,6 @@
 # HA Calories Buddy — User & Operator Manual
 
-**Version:** `0.2.4` (Phase 2 — *The Dietitian & Chef* + Item Remove/Swap, Sweet/Light Snack Chef & HTTP Photo Barcode)  
+**Version:** `0.2.5` (Phase 2 — *The Dietitian & Chef* + Add Ingredient, Slot Consolidation, Dynamic Biometrics & Semantic 6-Slot Planner)  
 **Minimum Home Assistant:** `2026.10.0` (verified on `2026.11.3` / Python `3.14`)  
 **Languages:** English (`en`) & Italian (`it`)
 
@@ -151,7 +151,7 @@ Every night at `23:55` (and whenever you log weight manually), the coordinator p
 
 ## 7. Daily Usage: Custom Lovelace Card
 
-In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.4` is registered automatically on startup.
+In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.5` is registered automatically on startup.
 
 1. Refresh your browser (`Ctrl+Shift+R` / clear mobile app cache once).
 2. Edit a dashboard → **+ Add Card** → search **HA Calories Buddy** (or add YAML `type: custom:ha-calories-buddy-card`).
@@ -165,11 +165,11 @@ In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-c
   - High-confidence logs save immediately as **Confirmed**.
   - Items with AI estimation (`llm_estimated`), raw/cooked state ambiguity (`ambiguous_state`), label Atwater mismatches (`atwater_warning`), or unknown units are saved as **Pending Confirmation**.
   - Review pending items inline: adjust grams, unit, or `Raw / Cooked / Ready to eat`, then tap **Confirm** (or **Confirm & Save Food** to promote an AI-estimated item permanently into the Food Vault).
-- **Inline Edit, Item Swap & Remove, Undo Delete & Quick Weight Entry:** Edit any logged item's quantity/unit/state, search and swap an item with another Food Vault entry inline, remove a single mistaken ingredient (`✕`) with automatic parent-meal recalculation, undo meal deletes on the toast banner, and record morning weight (`kg`) directly into SQLite snapshots.
+- **Unified Slot Diary, Inline Edit / Swap / `+ Add Ingredient` & Remove, and Dynamic Biometrics:** Confirmed items in the same meal slot automatically group into one combined slot card with summed macros, you can append a forgotten ingredient directly (`+ Add Ingredient`) or swap/remove (`✕`) individual rows, undo meal deletes on the toast banner, and inspect live Garmin/scale **Biometrics** (`Weight`, `Body Fat %`, `Lean Mass kg`) when mapped sensors are configured (with automatic manual entry fallback when unmapped or unavailable).
 
 ### Meal Planning & Dynamic Rebalancing (`Plan` Tab)
 - **Realtime Assist ↔ Card Sync:** Voice/Assist logs and service calls emit `ha_calories_buddy_updated` and read fresh SQLite totals, so the Custom Card refreshes automatically without reloading the page (plus a quick `↻` refresh button in the header).
-- **Suggest Meal ("What should I eat now?"):** Pick a meal slot (`Colazione`, `Spuntino Mattina`, `Pranzo`, `Merenda`, `Cena`, `Spuntino Serale`, etc.), **Budget Mode** (`Auto` smart remaining, `Full remaining today`, or `Standard slot share`), optional craving/hint, and max cook time to generate 3 completely distinct **alternative options** constrained by your allergies and what you already ate earlier today. Snacks and breakfasts automatically prefer sweet/light dishes (yogurt, fruit, biscuits, smoothies, spreads) unless savory is requested; cravings in `Hint` take top priority across all options and are exempted from same-day duplicate filtering. For large main meals (`>= 650 kcal`), proposals automatically structure multi-course components (`Secondo`, `Contorno`, `Pane / Carbo`, `Frutta / Extra`) and **Log as Eaten** saves the entire dish as 1 grouped meal entry.
+- **Suggest Meal & Multi-Day Plan ("What should I eat now?" / 1–7d Menu):** Semantic slot-aware weights support 1 to 6+ slots (e.g. giving `Pranzo`/`Cena` full main-meal multi-course shares `>= 550 kcal` while keeping `Colazione` and morning/afternoon/evening snacks sweet and light unless savory is requested), distinct meal times, and raw/cooked-consistent ingredient weights. **Log as Eaten** saves the entire dish cleanly into that slot.
 - **Generate 1–7 Day Plan:** Create an active personalized meal plan with optional **Meal Prep Batch Mode** (batches repeated lunches/dinners to minimize cooking). Every meal is deterministically scaled by Python's bounded algebraic solver to within `±5%` of your daily target.
 - **Interactive Daily Controls:** Expand ingredients & preparation steps, swap any single meal (`Swap`), click **Eaten (`✅`)** to promote a planned dish into today's `MealLog` in 1 tap (choosing `1.0x`, `0.75x`, `1.25x`, etc.), rate dishes (`Like`, `Dislike`, `Never Suggest`), or click **Rebalance Today** to adjust dinner/snacks after an unplanned meal (with multi-day smoothing option if over budget).
 
@@ -182,7 +182,7 @@ In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-c
 
 HA Calories Buddy registers a native Home Assistant Assist `llm.API` (`HA Calories Buddy`) with seven tools:
 1. `log_meal(text, meal_slot?, person?)`
-2. `correct_last_meal(item_name?, new_quantity?, new_unit?, new_state?, new_meal_slot?, replacement_food_name?, replacement_brand?, remove_item?, person?)`
+2. `correct_last_meal(item_name?, new_quantity?, new_unit?, new_state?, new_meal_slot?, replacement_food_name?, replacement_brand?, remove_item?, add_food_name?, add_brand?, add_quantity?, add_unit?, add_state?, target_meal_slot?, person?)`
 3. `get_today_nutrition_summary(person?)`
 4. `suggest_meal(meal_slot?, hint?, max_cook_minutes?, count?, person?)`
 5. `generate_meal_plan(num_days?, meal_prep_mode?, notes?, person?)`
@@ -207,7 +207,7 @@ HA Calories Buddy registers a native Home Assistant Assist `llm.API` (`HA Calori
 
 ### Barcode Scanning
 1. Click **Barcode** in the Quick Log bar or inside the **Food Vault** tab.
-2. Over plain HTTP or iOS/Android Companion apps, tap **Photo Barcode** (`📸`) to snap or upload a picture decoded directly in-browser (`EAN-13`, `EAN-8`, `UPC-A`), on HTTPS/localhost browsers supporting `BarcodeDetector` click **Start Camera**, or type/paste the barcode manually at any time.
+2. Over plain HTTP or iOS/Android Companion apps, tap **Photo / Gallery Barcode** (`📸`) to snap or upload a picture decoded directly in-browser (`EAN-13`, `EAN-8`, `UPC-A`), on HTTPS/localhost browsers supporting `BarcodeDetector` click **Start Camera**, or type/paste the barcode manually at any time.
 3. HA Calories Buddy searches the local Food Vault first, then queries **Open Food Facts**, runs an **EU/US Atwater sanity check** ($4P + 4C + 9F + 2\text{Fiber}$ vs. declared kcal), and flags discrepancies with an `Atwater Warning` badge before verification.
 4. Click **Save to Global Vault** (instantly available to every household member) or **Save & Log Meal** to save and record a portion immediately.
 
@@ -273,6 +273,7 @@ All services support optional response data (`SupportsResponse.OPTIONAL`) and re
 | `ha_calories_buddy.log_meal_text` | `text` (req), `person`, `meal_slot`, `date` | Parse & log a natural-language meal via LLM. |
 | `ha_calories_buddy.log_meal_item` | `quantity` (req), `food_id` / `barcode` / `name`, `unit`, `state`, `meal_slot`, `person`, `date` | Deterministic offline/manual item logging. |
 | `ha_calories_buddy.confirm_meal` | `log_id` (req), `promote_to_vault`, `person` | Confirm a pending meal and optionally save AI-estimated foods to Vault. |
+| `ha_calories_buddy.add_meal_item` | `log_id` (req), `quantity` (req), `food_id` / `barcode` / `name`, `brand`, `unit`, `state`, `person` | Resolve and append a forgotten ingredient to an existing meal log and recalculate totals. |
 | `ha_calories_buddy.update_meal_item` | `log_id` (req), `item_id` (req), `quantity` (req), `unit`, `state`, `food_id`, `person` | Update quantity/unit/state or swap item with another Food Vault `food_id` and recalculate totals. |
 | `ha_calories_buddy.update_meal_slot` | `log_id` (req), `meal_slot` (req), `person` | Reassign a logged meal to a different slot (e.g. `Cena`). |
 | `ha_calories_buddy.delete_meal_item` | `log_id` (req), `item_id` (req), `person` | Remove a single ingredient and recalculate parent totals (soft-deletes meal if empty). |
@@ -309,7 +310,7 @@ If your Home Assistant uses `lovelace: mode: yaml` instead of UI storage mode, a
 lovelace:
   mode: yaml
   resources:
-    - url: /ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.4
+    - url: /ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.5
       type: module
 ```
 
@@ -327,7 +328,7 @@ title: Calories Buddy
 ## 13. Troubleshooting & FAQ
 
 - **Custom Card shows "Custom element doesn't exist: ha-calories-buddy-card":**  
-  Hard-refresh your browser (`Ctrl+Shift+R`) or clear cache in the Home Assistant Companion app. Confirm under **Settings → Dashboards → Resources** that `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.4` is listed (if using YAML mode, follow [Section 12](#12-lovelace-yaml-mode-setup)).
+  Hard-refresh your browser (`Ctrl+Shift+R`) or clear cache in the Home Assistant Companion app. Confirm under **Settings → Dashboards → Resources** that `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.5` is listed (if using YAML mode, follow [Section 12](#12-lovelace-yaml-mode-setup)).
 - **Camera barcode scanner button is disabled:**  
   Live camera scanning requires HTTPS (or `localhost`) plus browser `BarcodeDetector` support (Chromium/Android WebView; iOS Safari lacks native `BarcodeDetector`). Type or paste the EAN digits directly into the manual lookup input—it works everywhere.
 - **Voice logging from a shared smart speaker returns an ambiguity error:**  

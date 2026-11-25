@@ -66,6 +66,36 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
   const pendingMeals = meals.filter((m) => m.status === "pending_confirmation");
   const confirmedMeals = meals.filter((m) => m.status === "confirmed");
 
+  const slotOrder = new Map(slots.map((s, idx) => [s.name, idx]));
+  const confirmedGroupsMap = new Map();
+  for (const meal of confirmedMeals) {
+    const key = meal.meal_slot || "Meal";
+    if (!confirmedGroupsMap.has(key)) {
+      confirmedGroupsMap.set(key, {
+        meal_slot: key,
+        logIds: [],
+        primaryLogId: meal.log_id,
+        items: [],
+        total_macros: { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
+      });
+    }
+    const grp = confirmedGroupsMap.get(key);
+    grp.logIds.push(meal.log_id);
+    grp.total_macros.kcal += Number(meal.total_macros?.kcal || 0);
+    grp.total_macros.protein_g += Number(meal.total_macros?.protein_g || 0);
+    grp.total_macros.carbs_g += Number(meal.total_macros?.carbs_g || 0);
+    grp.total_macros.fat_g += Number(meal.total_macros?.fat_g || 0);
+    grp.total_macros.fiber_g += Number(meal.total_macros?.fiber_g || 0);
+    for (const item of meal.items || []) {
+      grp.items.push({ ...item, _logId: item.log_id || meal.log_id });
+    }
+  }
+  const confirmedGroups = Array.from(confirmedGroupsMap.values()).sort((a, b) => {
+    const ia = slotOrder.has(a.meal_slot) ? slotOrder.get(a.meal_slot) : 999;
+    const ib = slotOrder.has(b.meal_slot) ? slotOrder.get(b.meal_slot) : 999;
+    return ia - ib;
+  });
+
   const renderMacroBar = (label, val, maxVal, color) => {
     const p = maxVal > 0 ? Math.min(100, Math.round((val / maxVal) * 100)) : 0;
     return `
@@ -81,26 +111,73 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
     `;
   };
 
-  const renderSlotSelect = (meal) => {
+  const renderSlotSelect = (mealSlot, logIds) => {
     const slotNames = slots.map((s) => s.name);
-    const hasCurrent = slotNames.includes(meal.meal_slot);
+    const hasCurrent = slotNames.includes(mealSlot);
+    const joinedIds = (logIds || []).join(",");
     return `
-      <select class="slot-inline-select meal-slot-select" data-log-id="${escapeHtml(meal.log_id)}">
-        ${!hasCurrent ? `<option value="${escapeHtml(meal.meal_slot)}" selected>${escapeHtml(meal.meal_slot)}</option>` : ""}
+      <select class="slot-inline-select meal-slot-select" data-log-ids="${escapeHtml(joinedIds)}">
+        ${!hasCurrent ? `<option value="${escapeHtml(mealSlot)}" selected>${escapeHtml(mealSlot)}</option>` : ""}
         ${slotNames
           .map(
             (name) =>
-              `<option value="${escapeHtml(name)}" ${meal.meal_slot === name ? "selected" : ""}>${escapeHtml(name)}</option>`
+              `<option value="${escapeHtml(name)}" ${mealSlot === name ? "selected" : ""}>${escapeHtml(name)}</option>`
           )
           .join("")}
       </select>
     `;
   };
 
-  const renderMealCard = (meal, isPending) => {
+  const renderAddItemPanel = (targetLogId) => {
+    const selFood = uiState.addSelectedFood || null;
+    const selState =
+      selFood && ["raw", "cooked", "ready_to_eat"].includes(selFood.preparation_state)
+        ? selFood.preparation_state
+        : "ready_to_eat";
+    const safeId = escapeHtml(targetLogId);
+    return `
+      <div class="add-item-box">
+        ${
+          selFood
+            ? `<div class="controls-row" style="margin-bottom: 6px;">
+                 <strong>${escapeHtml(localizedFoodName(selFood, lang))}</strong>
+                 ${selFood.brand ? `<span class="pill">${escapeHtml(selFood.brand)}</span>` : ""}
+                 <span class="pill good">${Math.round(selFood.macros_per_100g?.kcal || 0)} kcal/100g</span>
+                 <button type="button" class="chip-btn" id="clear-add-food-btn">✕</button>
+               </div>`
+            : ""
+        }
+        <div class="quick-input-row">
+          <input type="text" id="add-food-search-${safeId}" placeholder="${escapeHtml(t(lang, "add_item_placeholder"))}" />
+          <button type="button" class="secondary add-food-search-btn" data-log-id="${safeId}">🔍</button>
+        </div>
+        <div id="add-food-results-${safeId}" class="edit-food-results"></div>
+        <div class="controls-row" style="margin-top: 6px;">
+          <input type="number" step="0.5" min="0.1" id="add-qty-${safeId}" value="100" style="width: 75px;" />
+          <input type="text" id="add-unit-${safeId}" value="g" style="width: 65px;" />
+          <select id="add-state-${safeId}">
+            <option value="ready_to_eat" ${selState === "ready_to_eat" ? "selected" : ""}>${escapeHtml(t(lang, "state_ready_to_eat"))}</option>
+            <option value="raw" ${selState === "raw" ? "selected" : ""}>${escapeHtml(t(lang, "state_raw"))}</option>
+            <option value="cooked" ${selState === "cooked" ? "selected" : ""}>${escapeHtml(t(lang, "state_cooked"))}</option>
+          </select>
+          <button type="button" class="success confirm-add-item-btn" data-log-id="${safeId}">${escapeHtml(t(lang, "add_item_submit_btn"))}</button>
+          <button type="button" class="secondary cancel-add-item-btn">${escapeHtml(t(lang, "cancel_btn"))}</button>
+        </div>
+      </div>
+    `;
+  };
+
+  const renderMealGroupCard = (mealOrGroup, isPending) => {
     const editingItemId = uiState.editingItemId;
-    const itemsHtml = (meal.items || [])
+    const primaryLogId = isPending ? mealOrGroup.log_id : mealOrGroup.primaryLogId;
+    const logIds = isPending ? [mealOrGroup.log_id] : mealOrGroup.logIds;
+    const itemsList = mealOrGroup.items || [];
+    const totalMacros = mealOrGroup.total_macros || { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
+    const isAddingHere = uiState.addingToLogId === primaryLogId;
+
+    const itemsHtml = itemsList
       .map((item) => {
+        const itemLogId = item._logId || item.log_id || primaryLogId;
         const isEditing = editingItemId === item.item_id;
         const warnBadge = item.warning_code
           ? `<span class="pill warn">⚠️ ${escapeHtml(t(lang, `warn_${item.warning_code}`) || item.warning_code)}</span>`
@@ -138,9 +215,9 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
                     <option value="cooked" ${activeState === "cooked" ? "selected" : ""}>${escapeHtml(t(lang, "state_cooked"))}</option>
                     <option value="ready_to_eat" ${activeState === "ready_to_eat" ? "selected" : ""}>${escapeHtml(t(lang, "state_ready_to_eat"))}</option>
                   </select>
-                  <button type="button" class="success save-edit-btn" data-log-id="${escapeHtml(meal.log_id)}" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "save_btn"))}</button>
+                  <button type="button" class="success save-edit-btn" data-log-id="${escapeHtml(itemLogId)}" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "save_btn"))}</button>
                   <button type="button" class="secondary cancel-edit-btn">${escapeHtml(t(lang, "cancel_btn"))}</button>
-                  <button type="button" class="danger remove-item-btn" data-log-id="${escapeHtml(meal.log_id)}" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "remove_item_btn"))}</button>
+                  <button type="button" class="danger remove-item-btn" data-log-id="${escapeHtml(itemLogId)}" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "remove_item_btn"))}</button>
                 </div>
               </div>
             </div>
@@ -159,30 +236,107 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
             </div>
             <div class="controls-row">
               <button type="button" class="secondary start-edit-btn" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "edit_btn"))}</button>
-              <button type="button" class="icon-danger-btn remove-item-btn" title="${escapeHtml(t(lang, "remove_item_btn"))}" data-log-id="${escapeHtml(meal.log_id)}" data-item-id="${escapeHtml(item.item_id)}">✕</button>
+              <button type="button" class="icon-danger-btn remove-item-btn" title="${escapeHtml(t(lang, "remove_item_btn"))}" data-log-id="${escapeHtml(itemLogId)}" data-item-id="${escapeHtml(item.item_id)}">✕</button>
             </div>
           </div>
         `;
       })
       .join("");
 
-    const hasUnlinked = (meal.items || []).some((i) => !i.food_id);
+    const hasUnlinked = itemsList.some((i) => !i.food_id);
 
     return `
       <div class="meal-card ${isPending ? "pending" : ""}">
         <div class="meal-header">
           <span class="controls-row">
             <span>${isPending ? "⚠️" : "🍽️"}</span>
-            ${renderSlotSelect(meal)}
+            ${renderSlotSelect(mealOrGroup.meal_slot, logIds)}
           </span>
-          <span>${Math.round(meal.total_macros.kcal)} kcal</span>
+          <span>${Math.round(totalMacros.kcal)} kcal</span>
+        </div>
+        <div class="meal-item-meta" style="margin-bottom: 4px;">
+          P ${round1(totalMacros.protein_g)}g · C ${round1(totalMacros.carbs_g)}g · F ${round1(totalMacros.fat_g)}g · Fib ${round1(totalMacros.fiber_g || 0)}g
         </div>
         ${itemsHtml}
+        ${isAddingHere ? renderAddItemPanel(primaryLogId) : ""}
         <div class="meal-actions">
-          ${isPending ? `<button type="button" class="success confirm-meal-btn" data-log-id="${escapeHtml(meal.log_id)}" data-promote="0">${escapeHtml(t(lang, "confirm_btn"))}</button>` : ""}
-          ${isPending && hasUnlinked ? `<button type="button" class="warning confirm-meal-btn" data-log-id="${escapeHtml(meal.log_id)}" data-promote="1">${escapeHtml(t(lang, "confirm_promote_btn"))}</button>` : ""}
-          <button type="button" class="secondary delete-meal-btn" data-log-id="${escapeHtml(meal.log_id)}">${escapeHtml(t(lang, "delete_btn"))}</button>
+          ${isPending ? `<button type="button" class="success confirm-meal-btn" data-log-id="${escapeHtml(primaryLogId)}" data-promote="0">${escapeHtml(t(lang, "confirm_btn"))}</button>` : ""}
+          ${isPending && hasUnlinked ? `<button type="button" class="warning confirm-meal-btn" data-log-id="${escapeHtml(primaryLogId)}" data-promote="1">${escapeHtml(t(lang, "confirm_promote_btn"))}</button>` : ""}
+          <button type="button" class="secondary start-add-item-btn" data-log-id="${escapeHtml(primaryLogId)}">${escapeHtml(t(lang, "add_item_btn"))}</button>
+          <button type="button" class="secondary delete-meal-btn" data-log-ids="${escapeHtml(logIds.join(","))}">${escapeHtml(t(lang, "delete_btn"))}</button>
         </div>
+      </div>
+    `;
+  };
+
+  const bio = dashboard.biometrics || null;
+  const hasMappedBio = Boolean(bio && (bio.weight_entity_id || bio.body_fat_entity_id));
+  const weightInputVal = (bio?.weight_kg ?? dashboard.latest_weight_kg)
+    ? round1(bio?.weight_kg ?? dashboard.latest_weight_kg)
+    : "";
+  const renderBiometricsSection = () => {
+    if (!hasMappedBio) {
+      return `
+        <div class="section-title">${escapeHtml(t(lang, "weight_label"))}</div>
+        <div class="controls-row">
+          <input type="number" step="0.1" min="25" max="350" id="today-weight-input" value="${weightInputVal}" style="width: 110px;" />
+          <button type="button" class="secondary" id="save-weight-btn">${escapeHtml(t(lang, "log_weight_btn"))}</button>
+        </div>
+      `;
+    }
+    const weightBadge = bio.weight_entity_id
+      ? bio.weight_sensor_available
+        ? `<span class="pill good">📡 ${escapeHtml(bio.weight_entity_name || t(lang, "sensor_source_badge"))}</span>`
+        : `<span class="pill warn">⚠️ ${escapeHtml(t(lang, "sensor_unavailable_badge"))}</span>`
+      : `<span class="pill">${escapeHtml(t(lang, "weight_label"))}</span>`;
+    const bfBadge = bio.body_fat_entity_id
+      ? bio.body_fat_sensor_available
+        ? `<span class="pill good">📡 ${escapeHtml(bio.body_fat_entity_name || t(lang, "sensor_source_badge"))}</span>`
+        : `<span class="pill warn">⚠️ ${escapeHtml(t(lang, "sensor_unavailable_badge"))}</span>`
+      : "";
+    const needsFallback = !bio.weight_entity_id || !bio.weight_sensor_available;
+    return `
+      <div class="section-title">${escapeHtml(t(lang, "biometrics_title"))}</div>
+      <div class="biometrics-card">
+        <div class="biometrics-grid">
+          <div class="bio-stat">
+            <span class="bio-stat-label">${escapeHtml(t(lang, "weight_stat_label"))}</span>
+            <span class="bio-stat-val">${round1(bio.weight_kg)} kg</span>
+            <div>${weightBadge}</div>
+          </div>
+          ${
+            bio.body_fat_pct !== null && bio.body_fat_pct !== undefined
+              ? `<div class="bio-stat">
+                   <span class="bio-stat-label">${escapeHtml(t(lang, "body_fat_label"))}</span>
+                   <span class="bio-stat-val">${round1(bio.body_fat_pct)} %</span>
+                   ${bfBadge ? `<div>${bfBadge}</div>` : ""}
+                 </div>`
+              : ""
+          }
+          ${
+            bio.lean_mass_kg !== null && bio.lean_mass_kg !== undefined
+              ? `<div class="bio-stat">
+                   <span class="bio-stat-label">${escapeHtml(t(lang, "lean_mass_label"))}</span>
+                   <span class="bio-stat-val">${round1(bio.lean_mass_kg)} kg</span>
+                 </div>`
+              : ""
+          }
+        </div>
+        ${
+          needsFallback
+            ? `<div>
+                 <button type="button" class="chip-btn" id="toggle-manual-weight-btn">${escapeHtml(t(lang, "manual_weight_fallback_btn"))}</button>
+               </div>
+               ${
+                 uiState.showManualWeightFallback
+                   ? `<div class="controls-row">
+                        <input type="number" step="0.1" min="25" max="350" id="today-weight-input" value="${weightInputVal}" style="width: 110px;" />
+                        <button type="button" class="secondary" id="save-weight-btn">${escapeHtml(t(lang, "log_weight_btn"))}</button>
+                      </div>`
+                   : ""
+               }`
+            : ""
+        }
       </div>
     `;
   };
@@ -257,7 +411,7 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
     ${
       pendingMeals.length
         ? `<div class="section-title">⚠️ ${escapeHtml(t(lang, "pending_title"))} (${pendingMeals.length})</div>
-           ${pendingMeals.map((m) => renderMealCard(m, true)).join("")}`
+           ${pendingMeals.map((m) => renderMealGroupCard(m, true)).join("")}`
         : ""
     }
 
@@ -292,13 +446,9 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
     }
 
     <div class="section-title">${escapeHtml(t(lang, "todays_meals"))}</div>
-    ${confirmedMeals.length ? confirmedMeals.map((m) => renderMealCard(m, false)).join("") : `<div class="hint-text">${escapeHtml(t(lang, "no_meals_today"))}</div>`}
+    ${confirmedGroups.length ? confirmedGroups.map((g) => renderMealGroupCard(g, false)).join("") : `<div class="hint-text">${escapeHtml(t(lang, "no_meals_today"))}</div>`}
 
-    <div class="section-title">${escapeHtml(t(lang, "weight_label"))}</div>
-    <div class="controls-row">
-      <input type="number" step="0.1" min="25" max="350" id="today-weight-input" value="${dashboard.latest_weight_kg ? round1(dashboard.latest_weight_kg) : ""}" style="width: 110px;" />
-      <button type="button" class="secondary" id="save-weight-btn">${escapeHtml(t(lang, "log_weight_btn"))}</button>
-    </div>
+    ${renderBiometricsSection()}
   `;
 
   renderQuickLogBar(
@@ -328,10 +478,11 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
 
   container.querySelectorAll(".meal-slot-select").forEach((sel) => {
     sel.addEventListener("change", () => {
-      const logId = sel.getAttribute("data-log-id");
+      const rawIds = sel.getAttribute("data-log-ids") || "";
+      const logIds = rawIds.split(",").filter(Boolean);
       const newSlot = sel.value;
-      if (logId && newSlot) {
-        callbacks.onUpdateMealSlot?.(logId, newSlot);
+      if (logIds.length && newSlot) {
+        callbacks.onUpdateMealSlot?.(logIds, newSlot);
       }
     });
   });
@@ -365,7 +516,44 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
 
   container.querySelectorAll(".delete-meal-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      callbacks.onDeleteMeal(btn.getAttribute("data-log-id"));
+      const rawIds = btn.getAttribute("data-log-ids") || "";
+      const logIds = rawIds.split(",").filter(Boolean);
+      if (logIds.length) {
+        callbacks.onDeleteMeal(logIds);
+      }
+    });
+  });
+
+  container.querySelectorAll(".start-add-item-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      callbacks.onStartAddItem?.(btn.getAttribute("data-log-id"));
+    });
+  });
+
+  container.querySelectorAll(".cancel-add-item-btn").forEach((btn) => {
+    btn.addEventListener("click", () => callbacks.onStartAddItem?.(null));
+  });
+
+  container.querySelector("#clear-add-food-btn")?.addEventListener("click", () => {
+    callbacks.onSelectAddFood?.(null);
+  });
+
+  container.querySelectorAll(".confirm-add-item-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const logId = btn.getAttribute("data-log-id");
+      const qty = Number(container.querySelector(`#add-qty-${logId}`)?.value || 0);
+      const unit = (container.querySelector(`#add-unit-${logId}`)?.value || "g").trim();
+      const state = container.querySelector(`#add-state-${logId}`)?.value || "unspecified";
+      const chosen = uiState.addSelectedFood || null;
+      const typed = (container.querySelector(`#add-food-search-${logId}`)?.value || "").trim();
+      if (qty > 0 && (chosen || typed.length >= 2)) {
+        callbacks.onAddMealItem?.(logId, {
+          ...(chosen ? { food_id: chosen.food_id, name: localizedFoodName(chosen, lang) } : { name: typed }),
+          quantity: qty,
+          unit,
+          state,
+        });
+      }
     });
   });
 
@@ -407,16 +595,13 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
     callbacks.onSelectEditFood?.(null);
   });
 
-  if (uiState.editingItemId && callbacks.api) {
-    const eid = uiState.editingItemId;
-    const searchInput = container.querySelector(`#edit-food-search-${eid}`);
-    const resultsHost = container.querySelector(`#edit-food-results-${eid}`);
+  const wireVaultLookup = (searchInput, triggerBtn, resultsHost, onChoose) => {
+    if (!searchInput || !resultsHost || !callbacks.api) return;
     let searchTimer = null;
-
     const runFoodSearch = async () => {
-      const q = (searchInput?.value || "").trim();
-      if (!resultsHost || q.length < 2) {
-        if (resultsHost) resultsHost.innerHTML = "";
+      const q = (searchInput.value || "").trim();
+      if (q.length < 2) {
+        resultsHost.innerHTML = "";
         return;
       }
       try {
@@ -447,22 +632,43 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
         resultsHost.querySelectorAll(".edit-food-option").forEach((optBtn) => {
           optBtn.addEventListener("click", () => {
             const chosen = hits[Number(optBtn.getAttribute("data-hit-idx"))];
-            if (chosen) {
-              callbacks.onSelectEditFood?.(chosen);
-            }
+            if (chosen) onChoose(chosen);
           });
         });
       } catch (_err) {
         resultsHost.innerHTML = "";
       }
     };
-
-    searchInput?.addEventListener("input", () => {
+    searchInput.addEventListener("input", () => {
       if (searchTimer) clearTimeout(searchTimer);
       searchTimer = setTimeout(runFoodSearch, 250);
     });
-    container.querySelector(".edit-food-search-btn")?.addEventListener("click", runFoodSearch);
+    triggerBtn?.addEventListener("click", runFoodSearch);
+  };
+
+  if (uiState.editingItemId && callbacks.api) {
+    const eid = uiState.editingItemId;
+    wireVaultLookup(
+      container.querySelector(`#edit-food-search-${eid}`),
+      container.querySelector(".edit-food-search-btn"),
+      container.querySelector(`#edit-food-results-${eid}`),
+      (chosen) => callbacks.onSelectEditFood?.(chosen)
+    );
   }
+
+  if (uiState.addingToLogId && callbacks.api) {
+    const aid = uiState.addingToLogId;
+    wireVaultLookup(
+      container.querySelector(`#add-food-search-${aid}`),
+      container.querySelector(".add-food-search-btn"),
+      container.querySelector(`#add-food-results-${aid}`),
+      (chosen) => callbacks.onSelectAddFood?.(chosen)
+    );
+  }
+
+  container.querySelector("#toggle-manual-weight-btn")?.addEventListener("click", () => {
+    callbacks.onToggleManualWeightFallback?.();
+  });
 
   container.querySelector("#save-weight-btn")?.addEventListener("click", () => {
     const val = Number(container.querySelector("#today-weight-input")?.value || 0);

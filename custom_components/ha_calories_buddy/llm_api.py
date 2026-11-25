@@ -119,12 +119,13 @@ class LogMealTool(llm.Tool):
 
 
 class CorrectLastMealTool(llm.Tool):
-    """Assist tool to adjust, replace, remove items, or move meal_slot of a meal logged today."""
+    """Assist tool to add, adjust, replace, remove items, or move meal_slot of a meal logged today."""
 
     name = "correct_last_meal"
     title = "Correct logged meal item or slot"
     description = (
-        "Adjust quantity/unit/raw-cooked state of a food item logged today, "
+        "Add a forgotten ingredient to an existing meal logged today (`add_food_name`, `add_quantity`, "
+        "optional `target_meal_slot`), adjust quantity/unit/raw-cooked state of a logged item, "
         "swap a wrongly recognized ingredient with another food in the Vault (`replacement_food_name`), "
         "remove an unwanted extra ingredient (`remove_item: true`), and/or change the `meal_slot`."
     )
@@ -139,6 +140,12 @@ class CorrectLastMealTool(llm.Tool):
             vol.Optional("replacement_brand"): str,
             vol.Optional("remove_item", default=False): bool,
             vol.Optional("new_meal_slot"): str,
+            vol.Optional("add_food_name"): str,
+            vol.Optional("add_brand"): str,
+            vol.Optional("add_quantity"): vol.Coerce(float),
+            vol.Optional("add_unit"): str,
+            vol.Optional("add_state"): str,
+            vol.Optional("target_meal_slot"): str,
             vol.Optional("person"): str,
         }
     )
@@ -149,7 +156,7 @@ class CorrectLastMealTool(llm.Tool):
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
     ) -> llm.ToolResult:
-        """Update, swap, or remove an item and/or update meal_slot on today's meal."""
+        """Add, update, swap, or remove an item and/or update meal_slot on today's meal."""
         runtime: DomainRuntime = hass.data[DOMAIN]
         args = tool_input.tool_args
         try:
@@ -163,6 +170,85 @@ class CorrectLastMealTool(llm.Tool):
 
         today = dt_util.now().date()
         meals = await runtime.meal_repo.list_meals_for_date(profile.person_id, today)
+        add_name = str(args.get("add_food_name") or "").strip()
+        if add_name:
+            add_qty = float(args.get("add_quantity") or 100.0)
+            if add_qty <= 0:
+                return llm.ToolResult(
+                    data={"error": "add_quantity must be greater than zero"},
+                    error=True,
+                )
+            add_unit = str(args.get("add_unit") or "g")
+            raw_add_state = str(args.get("add_state") or "unspecified")
+            add_state = (
+                PreparationState(raw_add_state)
+                if raw_add_state in ("raw", "cooked", "ready_to_eat")
+                else PreparationState.UNSPECIFIED
+            )
+            target_meal: str | None = None
+            resolved_slot: str | None = None
+            if args.get("target_meal_slot"):
+                resolved_slot = resolve_meal_slot(
+                    str(args["target_meal_slot"]),
+                    profile.meal_slots,
+                    language=profile.language,
+                )
+                for m in reversed(meals):
+                    if m.meal_slot == resolved_slot:
+                        target_meal = m.log_id
+                        break
+            elif meals:
+                target_meal = meals[-1].log_id
+
+            if target_meal is not None:
+                added_meal = await runtime.logging_service.add_item_to_meal(
+                    profile,
+                    target_meal,
+                    name=add_name,
+                    brand=args.get("add_brand"),
+                    quantity=add_qty,
+                    unit=add_unit,
+                    state=add_state,
+                )
+                if added_meal is None:
+                    return llm.ToolResult(
+                        data={"error": "Failed to add ingredient to meal"},
+                        error=True,
+                    )
+            elif resolved_slot is not None:
+                res = await runtime.logging_service.log_manual_item(
+                    profile,
+                    name=add_name,
+                    quantity=add_qty,
+                    unit=add_unit,
+                    state=add_state,
+                    meal_slot=resolved_slot,
+                    log_date=today,
+                    source_channel="assist_correct_meal",
+                )
+                added_meal = res.meal_log
+            else:
+                return llm.ToolResult(
+                    data={"error": "No meals logged today and no target_meal_slot provided"},
+                    error=True,
+                )
+
+            await runtime.async_notify_person_updated(
+                profile.person_id, "assist_correct_meal"
+            )
+            return llm.ToolResult(
+                data={
+                    "person": profile.display_name,
+                    "meal_slot": added_meal.meal_slot,
+                    "added": True,
+                    "new_meal_kcal": added_meal.total_macros.kcal,
+                    "protein_g": added_meal.total_macros.protein_g,
+                    "carbs_g": added_meal.total_macros.carbs_g,
+                    "fat_g": added_meal.total_macros.fat_g,
+                    "fiber_g": round(added_meal.total_macros.fiber_g or 0.0, 1),
+                }
+            )
+
         if not meals:
             return llm.ToolResult(data={"error": "No meals logged today"}, error=True)
 

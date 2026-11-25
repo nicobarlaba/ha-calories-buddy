@@ -349,8 +349,8 @@ async def test_item_replacement_and_single_item_deletion_and_evening_slots(
     seeded_db: Database,
 ) -> None:
     """Verify Vault food replacement (with brand clear), single-item delete, and evening snack slot."""
-    assert canonical_slot_group("Spuntino serale") == "snack"
-    assert canonical_slot_group("Dopocena") == "snack"
+    assert canonical_slot_group("Spuntino serale") == "evening_snack"
+    assert canonical_slot_group("Dopocena") == "evening_snack"
     assert canonical_slot_group("Colazione") == "breakfast"
     assert canonical_slot_group("Cena") == "dinner"
     evening = MealSlotConfig(slot_id="s_eve", name="Spuntino serale", approx_time="12:30")
@@ -482,3 +482,58 @@ async def test_item_replacement_and_single_item_deletion_and_evening_slots(
     totals = await meal_repo.get_daily_totals(profile.person_id, today)
     assert totals.consumed.kcal == 0.0
     assert totals.confirmed_count == 0
+
+
+async def test_add_item_to_meal_and_same_slot_auto_merge(
+    seeded_db: Database,
+) -> None:
+    """Verify forgotten-ingredient addition and automatic confirmed same-slot merging."""
+    food_repo = FoodRepository(seeded_db)
+    resolver = FoodResolver(food_repo)
+    meal_repo = MealRepository(seeded_db)
+    profile_repo = ProfileRepository(seeded_db)
+
+    profile = _make_profile(lang="it")
+    await profile_repo.upsert_person(profile)
+    logging_svc = MealLoggingService(meal_repo, food_repo, resolver, lambda _p: None)
+    today = date.today()
+
+    # 1. Log first confirmed Dinner item
+    first = await logging_svc.log_manual_item(
+        profile,
+        food_id="seed_chicken_breast_raw",
+        quantity=150,
+        unit="g",
+        state=PreparationState.RAW,
+        meal_slot="Cena",
+        log_date=today,
+    )
+    assert len(first.meal_log.items) == 1
+
+    # 2. Logging another confirmed Dinner item merges into the same MealLog cleanly
+    merged = await logging_svc.log_manual_item(
+        profile,
+        food_id="seed_olive_oil",
+        quantity=10,
+        unit="g",
+        state=PreparationState.READY_TO_EAT,
+        meal_slot="Cena",
+        log_date=today,
+    )
+    assert merged.meal_log.log_id == first.meal_log.log_id
+    assert len(merged.meal_log.items) == 2
+    assert merged.meal_log.total_macros.kcal > first.meal_log.total_macros.kcal
+
+    # 3. Direct add_item_to_meal appends item #3 and updates fiber & kcal
+    added = await logging_svc.add_item_to_meal(
+        profile,
+        first.meal_log.log_id,
+        food_id="seed_wholewheat_bread",
+        quantity=50,
+        unit="g",
+        state=PreparationState.READY_TO_EAT,
+    )
+    assert added is not None
+    assert len(added.items) == 3
+    assert added.total_macros.kcal > merged.meal_log.total_macros.kcal
+    assert (added.total_macros.fiber_g or 0.0) >= 3.0

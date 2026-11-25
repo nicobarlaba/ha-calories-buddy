@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from custom_components.ha_calories_buddy.core.models import (
     Macros,
     MealLog,
     MealLogItem,
+    MealSlotConfig,
     MealStatus,
     PersonProfile,
     PlanGenerationOptions,
@@ -763,5 +765,237 @@ async def test_v024_snack_sweet_style_and_user_craving_priority(
         assert "ALREADY EATEN TODAY" not in client.system_prompts_seen[0]
         assert "QUALITY IMPROVEMENT NEEDED" in client.prompts_seen[1]
         assert all("Yogurt" in s.title for s in suggestions)
+    finally:
+        await client._session.close()
+
+
+async def test_v025_six_slot_day_plan_sweet_snack_retry_and_raw_cooked_norm(
+    ctx: dict[str, Any],
+) -> None:
+    """Verify 6-slot day plan blocks savory deli snacks, enforces lunch/dinner variety, and normalizes raw grains."""
+    profile: PersonProfile = ctx["profile"].model_copy(
+        update={
+            "meal_slots": [
+                MealSlotConfig(slot_id="col", name="Colazione"),
+                MealSlotConfig(slot_id="sp_m", name="Spuntino"),
+                MealSlotConfig(slot_id="pr", name="Pranzo"),
+                MealSlotConfig(slot_id="mer", name="Merenda"),
+                MealSlotConfig(slot_id="cen", name="Cena"),
+                MealSlotConfig(slot_id="sp_s", name="Spuntino Serale"),
+            ]
+        }
+    )
+    await ctx["profile_repo"].upsert_person(profile)
+    today = date.today()
+
+    # Attempt 1 fails quality checks: Bresaola in Spuntino Serale + Chicken at both Lunch & Dinner
+    bad_day = DayPlanProposalSchema(
+        meals=[
+            PlannedMealSkeleton(
+                meal_slot="Colazione",
+                title="Porridge e Yogurt",
+                prep_minutes=5,
+                steps=["Mescola gli ingredienti"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Yogurt Greco 0% Grassi", grams=170, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Fiocchi d'avena", grams=60, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Spuntino",
+                title="Mela e Mandorle",
+                prep_minutes=3,
+                steps=["Taglia la mela"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Mela", grams=150, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PRODUCE_FIXED),
+                    PlannedIngredientSpec(name="Mandorle", grams=15, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Pranzo",
+                title="Pollo e Riso",
+                prep_minutes=20,
+                steps=["Cuoci pollo e riso"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Petto di pollo", grams=150, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Riso Integrale", grams=115, preparation_state=PreparationState.COOKED, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Merenda",
+                title="Ricotta e Fette",
+                prep_minutes=3,
+                steps=["Spalma la ricotta"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Ricotta Vaccina", grams=80, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Fette Biscottate", grams=25, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Cena",
+                title="Pollo e Patate",
+                prep_minutes=25,
+                steps=["Cuoci pollo e patate"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Petto di pollo", grams=150, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Patate", grams=250, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Spuntino Serale",
+                title="Bresaola e Fette Biscottate",
+                prep_minutes=20,
+                steps=["Disponi nel piatto"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Bresaola", grams=80, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Fette Biscottate", grams=40, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+        ]
+    ).model_dump_json()
+
+    # Attempt 2 fixes snack style, dinner protein variety, AND submits cooked brown rice normalized to raw Vault
+    good_day = DayPlanProposalSchema(
+        meals=[
+            PlannedMealSkeleton(
+                meal_slot="Colazione",
+                title="Yogurt Greco, Avena e Frutti di Bosco",
+                prep_minutes=5,
+                steps=["Mescola yogurt, avena e frutti di bosco"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Yogurt Greco 0% Grassi", grams=170, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Fiocchi d'avena", grams=60, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                    PlannedIngredientSpec(name="Frutti di Bosco", grams=100, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PRODUCE_FIXED),
+                    PlannedIngredientSpec(name="Mandorle", grams=10, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Spuntino",
+                title="Mela e Mandorle",
+                prep_minutes=2,
+                steps=["Mangia la mela con le mandorle"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Mela", grams=150, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PRODUCE_FIXED),
+                    PlannedIngredientSpec(name="Mandorle", grams=15, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Pranzo",
+                title="Pollo con Riso Integrale e Broccoli",
+                prep_minutes=22,
+                steps=["Cuoci il riso integrale", "Griglia il pollo e condisci i broccoli"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Petto di pollo", grams=140, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR, course="Secondo"),
+                    PlannedIngredientSpec(name="Riso Integrale", grams=115, preparation_state=PreparationState.COOKED, role=IngredientRole.CARB_ANCHOR, course="Primo"),
+                    PlannedIngredientSpec(name="Broccoli", grams=150, preparation_state=PreparationState.RAW, role=IngredientRole.PRODUCE_FIXED, course="Contorno"),
+                    PlannedIngredientSpec(name="Olio EVO", grams=10, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR, course="Contorno"),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Merenda",
+                title="Fette Biscottate, Ricotta e Banana",
+                prep_minutes=3,
+                steps=["Spalma la ricotta sulle fette con fettine di banana"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Ricotta Vaccina", grams=80, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Fette Biscottate", grams=25, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR),
+                    PlannedIngredientSpec(name="Banana", grams=100, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PRODUCE_FIXED),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Cena",
+                title="Salmone al Forno con Patate, Zucchine e Pane",
+                prep_minutes=25,
+                steps=["Cuoci salmone e patate in forno"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Salmone fresco", grams=160, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR, course="Secondo"),
+                    PlannedIngredientSpec(name="Patate", grams=220, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR, course="Contorno"),
+                    PlannedIngredientSpec(name="Zucchine", grams=150, preparation_state=PreparationState.RAW, role=IngredientRole.PRODUCE_FIXED, course="Contorno"),
+                    PlannedIngredientSpec(name="Pane integrale", grams=40, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR, course="Pane / Carbo"),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Spuntino Serale",
+                title="Yogurt Greco, Cioccolato Fondente e Fette Biscottate",
+                prep_minutes=3,
+                steps=["Unisci yogurt greco, scaglie di cioccolato fondente e fette biscottate"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Yogurt Greco 0% Grassi", grams=120, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Cioccolato Fondente 85%", grams=12, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                    PlannedIngredientSpec(name="Fette Biscottate", grams=20, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+        ]
+    ).model_dump_json()
+
+    # Also script a 2-attempt swap on Spuntino Serale (Attempt 1 Bresaola -> Attempt 2 Ricotta & Mela)
+    bad_swap = SingleMealSwapSchema(
+        meal=PlannedMealSkeleton(
+            meal_slot="Spuntino Serale",
+            title="Bresaola e Pane",
+            prep_minutes=5,
+            steps=["Servi la bresaola"],
+            ingredients=[
+                PlannedIngredientSpec(name="Bresaola", grams=60, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                PlannedIngredientSpec(name="Pane integrale", grams=40, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR),
+            ],
+        )
+    ).model_dump_json()
+    good_swap = SingleMealSwapSchema(
+        meal=PlannedMealSkeleton(
+            meal_slot="Spuntino Serale",
+            title="Ricotta con Miele e Mela",
+            prep_minutes=3,
+            steps=["Mescola ricotta e miele con fettine di mela"],
+            ingredients=[
+                PlannedIngredientSpec(name="Ricotta Vaccina", grams=100, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                PlannedIngredientSpec(name="Miele", grams=10, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR),
+                PlannedIngredientSpec(name="Mela", grams=140, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PRODUCE_FIXED),
+            ],
+        )
+    ).model_dump_json()
+
+    client = ScriptedLLMClient([bad_day, good_day, bad_swap, good_swap])
+    try:
+        planner = MealPlannerService(
+            plan_repo=ctx["plan_repo"],
+            meal_repo=ctx["meal_repo"],
+            preference_engine=ctx["pref_engine"],
+            resolver=ctx["resolver"],
+            llm_client_getter=lambda _p: client,
+        )
+        daily = TargetResult(
+            target_kcal=2160.0,
+            protein_g=155.0,
+            carbs_g=240.0,
+            fat_g=64.0,
+            fiber_g=30.0,
+            mode=TargetMode.PHYSIOLOGY,
+        )
+        plan = await planner.generate_meal_plan(
+            profile,
+            start_date=today,
+            daily_targets=daily,
+            options=PlanGenerationOptions(num_days=1),
+        )
+        assert "SWEET/LIGHT SNACK" in client.prompts_seen[0]
+        assert "COMPLETE MULTI-COURSE MAIN MEAL" in client.prompts_seen[0]
+        assert "QUALITY IMPROVEMENT NEEDED" in client.prompts_seen[1]
+
+        dinner_snack = next(
+            it for it in plan.days[0].items if it.meal_slot == "Spuntino Serale"
+        )
+        assert "Bresaola" not in dinner_snack.title
+        assert dinner_snack.macros.kcal < 260.0
+
+        lunch_item = next(it for it in plan.days[0].items if it.meal_slot == "Pranzo")
+        lunch_ings = json.loads(lunch_item.ingredients_json)
+        rice_ing = next(i for i in lunch_ings if "Riso" in i["name"])
+        assert rice_ing["preparation_state"] == PreparationState.RAW.value
+        assert 40.0 <= rice_ing["grams"] <= 140.0
+
+        swapped = await planner.swap_plan_meal(profile, dinner_snack.plan_item_id)
+        assert "Ricotta" in swapped.title
+        assert "QUALITY IMPROVEMENT NEEDED" in client.prompts_seen[3]
     finally:
         await client._session.close()

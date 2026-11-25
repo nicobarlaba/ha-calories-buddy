@@ -17,6 +17,8 @@ from custom_components.ha_calories_buddy.core.planner.preferences import (
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     canonical_slot_group,
+    effective_slot_group,
+    is_sweet_default_slot_group,
 )
 from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
 
@@ -77,6 +79,8 @@ _SAVORY_HINT_TERMS = frozenset(
         "carne",
         "bresaola",
         "prosciutto",
+        "salumi",
+        "affettati",
         "tonno",
         "salmone",
         "merluzzo",
@@ -92,9 +96,11 @@ _SAVORY_HINT_TERMS = frozenset(
         "lenticchie",
         "ceci",
         "insalata",
+        "verdure",
         "chicken",
         "turkey",
         "beef",
+        "ham",
         "meat",
         "fish",
         "tuna",
@@ -104,6 +110,7 @@ _SAVORY_HINT_TERMS = frozenset(
         "sandwich",
         "wrap",
         "salad",
+        "vegetables",
     }
 )
 
@@ -269,14 +276,14 @@ def build_suggest_meal_prompts(
 ) -> tuple[str, str]:
     """Build prompts asking the Chef LLM for 1-3 tailored meal options."""
     slot_group = canonical_slot_group(meal_slot)
-    is_snack_or_breakfast = slot_group in {"breakfast", "morning_snack", "snack"}
+    is_snack_or_breakfast = is_sweet_default_slot_group(slot_group)
     wants_savory = is_savory_hint(user_hint)
     hint_tokens = extract_hint_tokens(user_hint)
     has_craving = bool(user_hint.strip() and hint_tokens)
 
-    is_large_meal = (not is_snack_or_breakfast) and target_macros.kcal >= 650.0
+    is_large_meal = (not is_snack_or_breakfast) and target_macros.kcal >= 550.0
     course_guidance = (
-        "MULTI-COURSE STRUCTURE (budget >= 650 kcal): Design each option as a complete, "
+        "MULTI-COURSE STRUCTURE (budget >= 550 kcal): Design each option as a complete, "
         "satisfying balanced meal rather than a tiny single plate — combine realistic courses "
         "(e.g. a main protein dish + quick vegetable side + bread/potatoes/grains + optional fruit "
         "or cheese/nuts), tagging each ingredient with its `course` ('Secondo', 'Contorno', "
@@ -292,9 +299,10 @@ def build_suggest_meal_prompts(
             f"SLOT STYLE ({meal_slot.upper()} — SWEET / LIGHT SNACK BY DEFAULT): "
             "Propose ONLY quick, light, sweet or sweet-neutral snack/breakfast creations "
             "(e.g. Greek yogurt, ricotta, cottage cheese, fresh fruit/berries/banana, oats/granola, "
-            "fette biscottate/rusks, whole-grain toast, peanut butter/nuts, dark chocolate, honey, whey). "
-            "NEVER propose heavy cooked lunch/dinner entrees (no chicken, turkey, beef, salmon, tuna, cod, "
-            "pasta, rice entrees, cooked potatoes, or savory meat/fish salads).\n"
+            "fette biscottate/rusks, whole-grain toast, peanut/almond butter, nuts, dark chocolate, honey, whey). "
+            "NEVER propose cured/deli meats (no bresaola, prosciutto, ham), heavy cooked lunch/dinner entrees "
+            "(no chicken, turkey, beef, salmon, tuna, cod, pasta, rice entrees, legumes), or savory vegetables "
+            "(no cucumbers, fennel, carrots, broccoli, peppers, mushrooms).\n"
         )
     elif is_snack_or_breakfast and wants_savory:
         slot_style_guidance = (
@@ -389,24 +397,40 @@ def build_day_plan_prompts(
     vault_catalog_hint: str = "",
 ) -> tuple[str, str]:
     """Build prompts to generate one complete day's meals respecting per-slot budgets."""
+    wants_savory_snacks = is_savory_hint(options.notes)
     slot_lines: list[str] = []
     has_large_slot = False
     for s in slots:
         max_min = options.max_cook_overrides.get(s.name, s.max_cook_minutes)
+        grp = effective_slot_group(s, slots)
         t = slot_targets.get(s.name)
+        is_sweet = is_sweet_default_slot_group(grp) and not wants_savory_snacks
+        if grp == "breakfast" and not wants_savory_snacks:
+            style_tag = " [SWEET/LIGHT BREAKFAST: yogurt/oats/fruit/rusks/ricotta/nuts; NO meat/deli/fish/savory veggies]"
+        elif is_sweet:
+            style_tag = (
+                " [SWEET/LIGHT SNACK (2-5 min): Greek yogurt, fruit/berries/banana, "
+                "fette biscottate, oats, nut butter/nuts, ricotta, dark chocolate, honey; "
+                "NEVER bresaola, prosciutto, chicken, beef, fish, legumes, pasta, rice, or savory veggies]"
+            )
+        elif not is_sweet_default_slot_group(grp) and t is not None and t.kcal >= 550.0:
+            has_large_slot = True
+            style_tag = " [COMPLETE MULTI-COURSE MAIN MEAL: tag ingredient `course`]"
+        else:
+            style_tag = " [COMPLETE BALANCED MEAL]"
+
         if t is not None:
-            if t.kcal >= 650.0:
-                has_large_slot = True
             slot_lines.append(
                 f"- {s.name} (max {max_min} min): ~{round(t.kcal)} kcal, "
-                f"P {round(t.protein_g)}g, C {round(t.carbs_g)}g, F {round(t.fat_g)}g"
+                f"P {round(t.protein_g)}g, C {round(t.carbs_g)}g, F {round(t.fat_g)}g{style_tag}"
             )
         else:
-            slot_lines.append(f"- {s.name} (max {max_min} min)")
+            slot_lines.append(f"- {s.name} (max {max_min} min){style_tag}")
 
     multi_course_line = (
-        "For large main meals (>= 650 kcal), compose complete balanced courses (e.g. main + vegetable side "
-        "+ bread/starch + optional fruit) and tag each ingredient's `course`.\n"
+        "For large main meals (>= 550 kcal), compose complete balanced courses (e.g. main + vegetable side "
+        "+ bread/starch + optional fruit) and tag each ingredient's `course` ('Secondo', 'Contorno', "
+        "'Pane / Carbo', 'Frutta / Extra', etc.).\n"
         if has_large_slot
         else ""
     )
@@ -421,6 +445,10 @@ def build_day_plan_prompts(
         "Generate exactly ONE meal for EVERY listed meal_slot matching its exact name.\n"
         "Each meal uses concrete whole ingredients in grams, explicit preparation_state, "
         "and accurate role ('protein_anchor', 'carb_anchor', 'fat_anchor', 'produce_fixed', 'condiment_fixed').\n"
+        "For dry grains/pasta/legumes and raw meat/fish matching `(Raw)`/`(Crudo)` Vault items, specify RAW weights "
+        "with `preparation_state='raw'` (never cooked weights under a raw food name).\n"
+        "Lunch and Dinner on the SAME day MUST use completely different primary protein sources AND distinct carb bases.\n"
+        "Set realistic `prep_minutes` (2-5 for cold snacks, 5-10 for breakfast, 15-30 for cooked meals) and always provide 2-4 concise `steps`.\n"
         f"{multi_course_line}"
         "NEVER include any forbidden allergen, intolerance, or non-compliant food.\n"
         f"{_format_preference_block(ctx)}"
@@ -459,9 +487,21 @@ def build_swap_meal_prompts(
     vault_catalog_hint: str = "",
 ) -> tuple[str, str]:
     """Build prompts to swap or rebalance a single meal slot."""
+    slot_group = canonical_slot_group(meal_slot)
+    is_snack_or_breakfast = is_sweet_default_slot_group(slot_group)
+    wants_savory = is_savory_hint(user_instruction)
+
+    slot_style_guidance = ""
+    if is_snack_or_breakfast and not wants_savory:
+        slot_style_guidance = (
+            f"SLOT STYLE ({meal_slot.upper()} — SWEET / LIGHT SNACK BY DEFAULT): "
+            "Propose a quick, light, sweet or sweet-neutral snack/breakfast creation "
+            "(Greek yogurt, ricotta, fruit/berries/banana, oats, fette biscottate, nut butter, dark chocolate, honey). "
+            "NEVER propose bresaola, prosciutto, meat, fish, legumes, pasta, rice, or savory vegetables.\n"
+        )
     multi_course_line = (
-        "Since budget >= 650 kcal, compose a complete multi-course meal and tag each ingredient's `course`.\n"
-        if target_macros.kcal >= 650.0
+        "Since budget >= 550 kcal, compose a complete multi-course meal and tag each ingredient's `course`.\n"
+        if (not is_snack_or_breakfast) and target_macros.kcal >= 550.0
         else ""
     )
     vault_section = (
@@ -473,10 +513,12 @@ def build_swap_meal_prompts(
         "You are a personal chef creating a compliant replacement dish for one meal slot.\n"
         f"Output language for title, steps, and `course` labels: {profile.language}.\n"
         "Set meal_slot to the exact requested slot name.\n"
-        "Include concrete ingredients in grams, preparation_state, and ingredient roles.\n"
+        "Include concrete ingredients in grams, accurate preparation_state ('raw' for dry grains/pasta matching raw Vault foods), "
+        "ingredient roles, realistic `prep_minutes`, and 2-4 concise `steps`.\n"
+        f"{slot_style_guidance}"
         f"{multi_course_line}"
         "NEVER violate allergies, intolerances, blacklist, or dietary regime.\n"
-        f"{_format_preference_block(ctx)}"
+        f"{_format_preference_block(ctx, user_hint=user_instruction)}"
         f"{vault_section}"
     )
     instr = (

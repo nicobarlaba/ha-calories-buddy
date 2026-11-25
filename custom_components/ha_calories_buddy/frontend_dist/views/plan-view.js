@@ -19,18 +19,31 @@ function groupIngredientsByCourse(ingredients) {
   return groups;
 }
 
-function renderCompactIngredientsHtml(ingredients) {
+function formatCompactIngLabel(ing, lang = "en") {
+  const name = String(ing.name || "");
+  const st = ing.preparation_state;
+  let stateHint = "";
+  if (st === "raw" || st === "cooked") {
+    const lbl = lang === "it" ? (st === "raw" ? "crudo" : "cotto") : st;
+    if (!name.toLowerCase().includes(lbl)) {
+      stateHint = ` (${lbl})`;
+    }
+  }
+  return `${escapeHtml(name + stateHint)} ${round1(ing.grams)}g`;
+}
+
+function renderCompactIngredientsHtml(ingredients, lang = "en") {
   const groups = groupIngredientsByCourse(ingredients);
   if (!groups) {
     return (ingredients || [])
-      .map((i) => `${escapeHtml(i.name)} ${round1(i.grams)}g`)
+      .map((i) => formatCompactIngLabel(i, lang))
       .join(" · ");
   }
   return groups
     .map(
       ([course, ings]) =>
         `<div class="course-line"><span class="course-tag">${escapeHtml(course)}</span> ${ings
-          .map((i) => `${escapeHtml(i.name)} ${round1(i.grams)}g`)
+          .map((i) => formatCompactIngLabel(i, lang))
           .join(" · ")}</div>`
     )
     .join("");
@@ -223,7 +236,7 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
                  P ${round1(sug.macros.protein_g)}g · C ${round1(sug.macros.carbs_g)}g · F ${round1(sug.macros.fat_g)}g · Fib ${round1(sug.macros.fiber_g || 0)}g
                </div>
                <div class="meal-item-meta" style="margin-top:4px;">
-                 ${renderCompactIngredientsHtml(sug.ingredients || [])}
+                 ${renderCompactIngredientsHtml(sug.ingredients || [], lang)}
                </div>
                <div class="meal-actions">
                  <button type="button" class="secondary view-sug-recipe-btn" data-idx="${idx}">${escapeHtml(t(lang, "recipe_btn"))}</button>
@@ -276,7 +289,7 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
                   ⏱️ ${item.prep_minutes}m · P ${round1(item.macros.protein_g)}g C ${round1(item.macros.carbs_g)}g F ${round1(item.macros.fat_g)}g Fib ${round1(item.macros.fiber_g || 0)}g
                 </div>
                 <div class="meal-item-meta" style="margin-top:4px;">
-                  ${renderCompactIngredientsHtml(ings)}
+                  ${renderCompactIngredientsHtml(ings, lang)}
                 </div>
                 ${
                   isSwapping

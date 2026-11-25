@@ -21,6 +21,7 @@ from custom_components.ha_calories_buddy.core.nutrition.yield_factors import (
 )
 from custom_components.ha_calories_buddy.core.physiology.targets import TargetResult
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    effective_slot_group,
     slot_approx_minutes,
 )
 from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
@@ -31,6 +32,26 @@ DEFAULT_SHARES_BY_COUNT: dict[int, tuple[float, ...]] = {
     3: (25.0, 40.0, 35.0),
     4: (22.0, 35.0, 13.0, 30.0),
     5: (20.0, 10.0, 32.0, 10.0, 28.0),
+}
+
+_SEMANTIC_KCAL_WEIGHTS: dict[str, float] = {
+    "breakfast": 22.0,
+    "morning_snack": 8.0,
+    "lunch": 35.0,
+    "snack": 13.0,
+    "dinner": 30.0,
+    "evening_snack": 8.0,
+    "other": 15.0,
+}
+
+_SEMANTIC_PROTEIN_WEIGHTS: dict[str, float] = {
+    "breakfast": 18.0,
+    "morning_snack": 7.0,
+    "lunch": 35.0,
+    "snack": 10.0,
+    "dinner": 33.0,
+    "evening_snack": 7.0,
+    "other": 15.0,
 }
 
 
@@ -59,23 +80,75 @@ def allocate_slot_targets(
     explicit = [s.kcal_share_pct for s in slots]
     if all(v is not None and v > 0 for v in explicit):
         raw_weights = [float(v) for v in explicit if v is not None]
-    else:
-        preset = DEFAULT_SHARES_BY_COUNT.get(count)
-        if preset is not None:
-            raw_weights = list(preset)
-        else:
-            raw_weights = [100.0 / count] * count
+        total_w = sum(raw_weights) or 100.0
+        return {
+            slot.name: Macros(
+                kcal=round(daily_targets.target_kcal * (weight / total_w), 1),
+                protein_g=round(daily_targets.protein_g * (weight / total_w), 1),
+                carbs_g=round(daily_targets.carbs_g * (weight / total_w), 1),
+                fat_g=round(daily_targets.fat_g * (weight / total_w), 1),
+                fiber_g=round(daily_targets.fiber_g * (weight / total_w), 1),
+            )
+            for slot, weight in zip(slots, raw_weights, strict=True)
+        }
 
-    total_w = sum(raw_weights) or 100.0
+    slot_groups = [effective_slot_group(s, slots) for s in slots]
+    if count == 1:
+        kcal_weights = [1.0]
+        prot_weights = [1.0]
+    elif all(grp == "other" for grp in slot_groups):
+        preset = DEFAULT_SHARES_BY_COUNT.get(count)
+        kcal_weights = list(preset) if preset is not None else [100.0 / count] * count
+        prot_weights = list(kcal_weights)
+    else:
+        has_extra_snack = any(
+            grp in ("morning_snack", "evening_snack") for grp in slot_groups
+        )
+        kcal_weights = [
+            10.0 if (grp == "snack" and has_extra_snack) else _SEMANTIC_KCAL_WEIGHTS.get(grp, 15.0)
+            for grp in slot_groups
+        ]
+        prot_weights = [
+            8.0 if (grp == "snack" and has_extra_snack) else _SEMANTIC_PROTEIN_WEIGHTS.get(grp, 15.0)
+            for grp in slot_groups
+        ]
+
+    total_kw = sum(kcal_weights) or 1.0
+    total_pw = sum(prot_weights) or 1.0
+    kcal_fracs = [w / total_kw for w in kcal_weights]
+    prot_fracs = [w / total_pw for w in prot_weights]
+
+    slot_kcals = [daily_targets.target_kcal * kf for kf in kcal_fracs]
+    slot_prots = [
+        min(daily_targets.protein_g * pf, max(0.0, sk * 0.9 / 4.0))
+        for sk, pf in zip(slot_kcals, prot_fracs, strict=True)
+    ]
+    prot_sum = sum(slot_prots)
+    if prot_sum > 0 and abs(prot_sum - daily_targets.protein_g) > 0.01:
+        prot_scale = daily_targets.protein_g / prot_sum
+        slot_prots = [sp * prot_scale for sp in slot_prots]
+
+    non_prot = [
+        max(0.0, sk - 4.0 * sp)
+        for sk, sp in zip(slot_kcals, slot_prots, strict=True)
+    ]
+    total_non_prot = sum(non_prot)
+    cf_fracs = (
+        [np / total_non_prot for np in non_prot]
+        if total_non_prot > 1e-6
+        else kcal_fracs
+    )
+
     result: dict[str, Macros] = {}
-    for slot, weight in zip(slots, raw_weights, strict=True):
-        frac = weight / total_w
+    for idx, slot in enumerate(slots):
+        kf = kcal_fracs[idx]
+        cf = cf_fracs[idx]
         result[slot.name] = Macros(
-            kcal=round(daily_targets.target_kcal * frac, 1),
-            protein_g=round(daily_targets.protein_g * frac, 1),
-            carbs_g=round(daily_targets.carbs_g * frac, 1),
-            fat_g=round(daily_targets.fat_g * frac, 1),
-            fiber_g=round(daily_targets.fiber_g * frac, 1),
+            kcal=round(slot_kcals[idx], 1),
+            protein_g=round(slot_prots[idx], 1),
+            carbs_g=round(daily_targets.carbs_g * cf, 1),
+            fat_g=round(daily_targets.fat_g * cf, 1),
+            fiber_g=round(daily_targets.fiber_g * kf, 1),
         )
     return result
 
@@ -143,7 +216,7 @@ def compute_smart_slot_budget(
 
     ordered = sorted(
         enumerate(slots),
-        key=lambda pair: (slot_approx_minutes(pair[1]), pair[0]),
+        key=lambda pair: (slot_approx_minutes(pair[1], all_slots=slots), pair[0]),
     )
     ordered_slots = [s for _, s in ordered]
     target_norm = normalize_text(target_slot_name)

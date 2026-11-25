@@ -13,6 +13,7 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
   let rafId = null;
   let scanning = false;
   let statusMsg = "";
+  let saving = false;
   let currentEan = "";
   let foundFood = null;
   let notFound = false;
@@ -249,8 +250,8 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
                 </div>
               </div>
               <div class="meal-actions">
-                <button type="button" class="secondary" id="bc-save-global">${escapeHtml(t(language, "save_global_btn"))}</button>
-                <button type="button" class="success" id="bc-save-and-log">${escapeHtml(t(language, "save_and_log_btn"))}</button>
+                <button type="button" class="secondary" id="bc-save-global" ${saving ? "disabled" : ""}>${escapeHtml(t(language, "save_global_btn"))}</button>
+                <button type="button" class="success" id="bc-save-and-log" ${saving ? "disabled" : ""}>${escapeHtml(t(language, "save_and_log_btn"))}</button>
               </div>
             </div>
           `
@@ -312,25 +313,43 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
     });
 
     host.querySelector("#bc-save-global")?.addEventListener("click", async () => {
-      const saved = await api.saveFood(personId, collectFoodPayload());
-      foundFood = saved.food;
-      notFound = false;
-      await callbacks.onVaultUpdated();
+      if (saving) return;
+      saving = true;
+      statusMsg = "";
       render();
+      try {
+        const saved = await api.saveFood(personId, collectFoodPayload());
+        closeModal();
+        await callbacks.onVaultUpdated?.(saved?.food || null);
+      } catch (err) {
+        saving = false;
+        statusMsg = err?.message || t(language, "save_failed");
+        render();
+      }
     });
 
     host.querySelector("#bc-save-and-log")?.addEventListener("click", async () => {
-      const saved = await api.saveFood(personId, collectFoodPayload());
-      const qty = Number(host.querySelector("#bc-qty")?.value || 100);
-      closeModal();
-      await callbacks.onLogFood({
-        food_id: saved.food.food_id,
-        name: saved.food.name,
-        quantity: qty,
-        unit: "g",
-        state: saved.food.preparation_state,
-        meal_slot: chosenSlot,
-      });
+      if (saving) return;
+      saving = true;
+      statusMsg = "";
+      render();
+      try {
+        const saved = await api.saveFood(personId, collectFoodPayload());
+        const qty = Number(host.querySelector("#bc-qty")?.value || 100);
+        closeModal();
+        await callbacks.onLogFood({
+          food_id: saved.food.food_id,
+          name: saved.food.name,
+          quantity: qty,
+          unit: "g",
+          state: saved.food.preparation_state,
+          meal_slot: chosenSlot,
+        });
+      } catch (err) {
+        saving = false;
+        statusMsg = err?.message || t(language, "save_failed");
+        render();
+      }
     });
   };
 

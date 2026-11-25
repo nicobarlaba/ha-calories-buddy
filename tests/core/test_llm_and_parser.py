@@ -343,6 +343,7 @@ async def test_hybrid_meal_logging_and_offline_manual_flow(tmp_path: Path) -> No
             quantity=150,
             unit="g",
             meal_slot="Pranzo",
+            merge_existing_slot=False,
         )
         assert manual_res.meal_log.status == MealStatus.CONFIRMED
         assert manual_res.meal_log.total_macros.protein_g == pytest.approx(15.5, abs=0.2)

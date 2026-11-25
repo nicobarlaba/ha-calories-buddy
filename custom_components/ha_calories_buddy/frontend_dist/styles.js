@@ -487,4 +487,43 @@ export const CARD_STYLES = `
     color: var(--primary-text-color);
     font-size: 0.8rem;
   }
+  .toast.success-toast {
+    background: rgba(76, 175, 80, 0.14);
+    border: 1px solid rgba(76, 175, 80, 0.35);
+    color: var(--success-color, #2e7d32);
+  }
+  .add-item-box {
+    border: 1px dashed var(--divider-color, rgba(127, 127, 127, 0.35));
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-top: 8px;
+    background: rgba(127, 127, 127, 0.04);
+  }
+  .biometrics-card {
+    border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.22));
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .biometrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+  }
+  .bio-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.82rem;
+  }
+  .bio-stat-label {
+    font-size: 0.72rem;
+    color: var(--secondary-text-color);
+  }
+  .bio-stat-val {
+    font-size: 1rem;
+    font-weight: 700;
+  }
 `;

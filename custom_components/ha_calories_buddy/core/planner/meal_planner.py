@@ -42,6 +42,9 @@ from custom_components.ha_calories_buddy.core.models import (
 )
 from custom_components.ha_calories_buddy.core.nutrition.calculator import sum_macros
 from custom_components.ha_calories_buddy.core.nutrition.resolver import FoodResolver
+from custom_components.ha_calories_buddy.core.nutrition.yield_factors import (
+    convert_to_reference_grams,
+)
 from custom_components.ha_calories_buddy.core.physiology.targets import TargetResult
 from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
     ScalableIngredientInput,
@@ -60,6 +63,8 @@ from custom_components.ha_calories_buddy.core.planner.preferences import (
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     canonical_slot_group,
     default_slots_for_language,
+    effective_slot_group,
+    is_sweet_default_slot_group,
     resolve_meal_slot,
 )
 from custom_components.ha_calories_buddy.core.storage.meal_repo import MealRepository
@@ -70,6 +75,74 @@ from custom_components.ha_calories_buddy.core.storage.seeder import normalize_te
 
 _LOGGER = get_logger(__name__)
 MAX_SAFETY_RETRIES = 2
+
+_SAVORY_ENTREE_CATS = frozenset(
+    {"poultry", "red_meat", "fish", "pasta", "rice", "legumes", "vegetables"}
+)
+_SAVORY_RAW_KEYWORDS = (
+    "bresaola",
+    "prosciutto",
+    "salame",
+    "tacchino",
+    "pollo",
+    "manzo",
+    "tonno",
+    "salmone",
+    "merluzzo",
+    "ceci",
+    "lenticchie",
+    "cetriol",
+    "finocch",
+    "carot",
+    "rucola",
+    "broccol",
+    "peperon",
+    "funghi",
+    "chicken",
+    "turkey",
+    "beef",
+    "tuna",
+    "salmon",
+    "cod",
+    "lentil",
+    "chickpea",
+    "cucumber",
+    "fennel",
+    "carrot",
+    "broccoli",
+    "pepper",
+    "mushroom",
+)
+
+
+def _find_sweet_slot_savory_item(ings: list[ScalableIngredientInput]) -> str | None:
+    """Return the first savory entree/deli/vegetable ingredient name, or None."""
+    for ing in ings:
+        if ing.food is not None and ing.food.category.lower() in _SAVORY_ENTREE_CATS:
+            return ing.name
+        norm_name = normalize_text(ing.name)
+        if any(kw in norm_name for kw in _SAVORY_RAW_KEYWORDS):
+            return ing.name
+    return None
+
+
+def _primary_anchor_pair(ings: list[ScalableIngredientInput]) -> tuple[str, str]:
+    """Extract (protein_anchor_token, carb_anchor_token) for diversity comparison."""
+    prot = next(
+        (
+            normalize_text(i.name).split()[0]
+            for i in ings
+            if i.role == IngredientRole.PROTEIN_ANCHOR and normalize_text(i.name)
+        ),
+        "",
+    )
+    carb_ing = next((i for i in ings if i.role == IngredientRole.CARB_ANCHOR), None)
+    carb = (
+        normalize_text(carb_ing.name).split()[0]
+        if carb_ing and normalize_text(carb_ing.name)
+        else ""
+    )
+    return prot, carb
 
 
 class HardConstraintViolationError(Exception):
@@ -329,6 +402,7 @@ class MealPlannerService:
                 system_prompt=sys_prompt,
                 user_prompt=user_prompt,
                 resolve_cache=resolve_cache,
+                notes=options.notes,
             )
 
             slot_inputs = [
@@ -438,7 +512,11 @@ class MealPlannerService:
         ctx = await self._pref_engine.build_context(
             profile, reference_date=plan_day.plan_date
         )
-        vault_hint = await self._build_vault_catalog_hint(profile)
+        vault_hint = await self._build_vault_catalog_hint(
+            profile,
+            meal_slot=current_item.meal_slot,
+            user_hint=user_instruction,
+        )
         resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] = {}
         sys_prompt, user_prompt = build_swap_meal_prompts(
             profile=profile,
@@ -459,6 +537,7 @@ class MealPlannerService:
             system_prompt=sys_prompt,
             user_prompt=user_prompt,
             resolve_cache=resolve_cache,
+            user_instruction=user_instruction,
         )
         scaled_ings, meal_macros, meal_warn = scale_meal_ingredients(
             resolved_ings, slot_budget
@@ -640,17 +719,19 @@ class MealPlannerService:
         system_prompt: str,
         user_prompt: str,
         resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] | None = None,
+        notes: str = "",
     ) -> list[tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]]:
         prompt = user_prompt
         last_violations: list[str] = []
         cache = resolve_cache if resolve_cache is not None else {}
+        safe_day: list[tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]] | None = None
+
         for _attempt in range(MAX_SAFETY_RETRIES + 1):
             resp = await llm_client.generate_structured(
                 system_prompt=system_prompt,
                 user_prompt=prompt,
                 response_model=DayPlanProposalSchema,
             )
-            # Align each generated meal slot name cleanly
             for idx, m in enumerate(resp.meals):
                 fallback = (
                     getattr(slots[idx], "name", None)
@@ -670,14 +751,70 @@ class MealPlannerService:
                 resolve_cache=cache,
             )
             if not violations and len(passed) == len(resp.meals):
-                return passed
+                safe_day = passed
+                break
             last_violations = violations
             prompt = (
                 f"{user_prompt}\n\n"
                 "CRITICAL SAFETY REJECTION — Forbidden allergen/blacklist/regime detected: "
                 f"{', '.join(violations)}. Regenerate the full day strictly without these items."
             )
-        raise HardConstraintViolationError(last_violations or ["day_safety_failed"])
+
+        if safe_day is None:
+            raise HardConstraintViolationError(last_violations or ["day_safety_failed"])
+
+        quality_issues = self._detect_day_plan_quality_issues(
+            safe_day, slots=slots, notes=notes
+        )
+        if quality_issues:
+            try:
+                retry_prompt = (
+                    f"{user_prompt}\n\n"
+                    "QUALITY IMPROVEMENT NEEDED — Regenerate the day plan fixing these culinary issues:\n"
+                    + "\n".join(f"- {issue}" for issue in quality_issues)
+                )
+                retry_resp = await llm_client.generate_structured(
+                    system_prompt=system_prompt,
+                    user_prompt=retry_prompt,
+                    response_model=DayPlanProposalSchema,
+                )
+                for idx, m in enumerate(retry_resp.meals):
+                    fallback = (
+                        getattr(slots[idx], "name", None)
+                        if idx < len(slots)
+                        else None
+                    )
+                    m.meal_slot = resolve_meal_slot(
+                        m.meal_slot or fallback,
+                        profile.meal_slots,
+                        language=profile.language,
+                    )
+                retry_passed, retry_violations = await self._validate_and_resolve_skeletons(
+                    profile=profile,
+                    skeletons=retry_resp.meals,
+                    ctx=ctx,
+                    llm_client=llm_client,
+                    resolve_cache=cache,
+                )
+                if (
+                    retry_passed
+                    and not retry_violations
+                    and len(retry_passed) == len(retry_resp.meals)
+                ):
+                    retry_issues = self._detect_day_plan_quality_issues(
+                        retry_passed, slots=slots, notes=notes
+                    )
+                    if len(retry_issues) <= len(quality_issues):
+                        return retry_passed
+            except Exception as exc:  # noqa: BLE001
+                log_event(
+                    _LOGGER,
+                    logging.INFO,
+                    "day_plan_quality_retry_skipped",
+                    error_type=type(exc).__name__,
+                )
+
+        return safe_day
 
     async def _generate_safe_single_swap(
         self,
@@ -689,10 +826,13 @@ class MealPlannerService:
         system_prompt: str,
         user_prompt: str,
         resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] | None = None,
+        user_instruction: str = "",
     ) -> tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]:
         prompt = user_prompt
         last_violations: list[str] = []
         cache = resolve_cache if resolve_cache is not None else {}
+        safe_swap: tuple[PlannedMealSkeleton, list[ScalableIngredientInput]] | None = None
+
         for _attempt in range(MAX_SAFETY_RETRIES + 1):
             resp = await llm_client.generate_structured(
                 system_prompt=system_prompt,
@@ -708,14 +848,58 @@ class MealPlannerService:
                 resolve_cache=cache,
             )
             if not violations and passed:
-                return passed[0]
+                safe_swap = passed[0]
+                break
             last_violations = violations
             prompt = (
                 f"{user_prompt}\n\n"
                 "SAFETY REJECTION — Forbidden item detected: "
                 f"{', '.join(violations)}. Replace cleanly without forbidden ingredients."
             )
-        raise HardConstraintViolationError(last_violations or ["swap_safety_failed"])
+
+        if safe_swap is None:
+            raise HardConstraintViolationError(last_violations or ["swap_safety_failed"])
+
+        quality_issues = self._detect_swap_quality_issues(
+            safe_swap, meal_slot=slot_name, user_instruction=user_instruction
+        )
+        if quality_issues:
+            try:
+                retry_prompt = (
+                    f"{user_prompt}\n\n"
+                    "QUALITY IMPROVEMENT NEEDED — Fix these issues:\n"
+                    + "\n".join(f"- {issue}" for issue in quality_issues)
+                )
+                retry_resp = await llm_client.generate_structured(
+                    system_prompt=system_prompt,
+                    user_prompt=retry_prompt,
+                    response_model=SingleMealSwapSchema,
+                )
+                retry_resp.meal.meal_slot = slot_name
+                retry_passed, retry_violations = await self._validate_and_resolve_skeletons(
+                    profile=profile,
+                    skeletons=[retry_resp.meal],
+                    ctx=ctx,
+                    llm_client=llm_client,
+                    resolve_cache=cache,
+                )
+                if retry_passed and not retry_violations:
+                    retry_issues = self._detect_swap_quality_issues(
+                        retry_passed[0],
+                        meal_slot=slot_name,
+                        user_instruction=user_instruction,
+                    )
+                    if len(retry_issues) <= len(quality_issues):
+                        return retry_passed[0]
+            except Exception as exc:  # noqa: BLE001
+                log_event(
+                    _LOGGER,
+                    logging.INFO,
+                    "swap_quality_retry_skipped",
+                    error_type=type(exc).__name__,
+                )
+
+        return safe_swap
 
     async def _validate_and_resolve_skeletons(
         self,
@@ -770,7 +954,27 @@ class MealPlannerService:
                 resolved_foods.append(food)
                 role = classify_ingredient_role(food, spec.role)
                 eff_state = spec.preparation_state
+                proposed_grams = spec.grams
                 if eff_state == PreparationState.UNSPECIFIED and food is not None:
+                    eff_state = food.preparation_state
+                elif (
+                    food is not None
+                    and food.preparation_state in (PreparationState.RAW, PreparationState.COOKED)
+                    and eff_state in (PreparationState.RAW, PreparationState.COOKED)
+                    and eff_state != food.preparation_state
+                ):
+                    proposed_grams = round(
+                        max(
+                            5.0,
+                            convert_to_reference_grams(
+                                input_grams=spec.grams,
+                                effective_state=eff_state,
+                                ref_state=food.preparation_state,
+                                yield_factor=food.yield_factor,
+                            ),
+                        ),
+                        1,
+                    )
                     eff_state = food.preparation_state
                 disp_name = (
                     food.localized_name(profile.language)
@@ -781,7 +985,7 @@ class MealPlannerService:
                     ScalableIngredientInput(
                         name=disp_name,
                         food=food,
-                        proposed_grams=spec.grams,
+                        proposed_grams=proposed_grams,
                         preparation_state=eff_state,
                         role=role,
                         brand=spec.brand,
@@ -818,7 +1022,7 @@ class MealPlannerService:
             return ""
         slot_group = canonical_slot_group(meal_slot or "")
         sweet_snack_focus = (
-            slot_group in {"breakfast", "morning_snack", "snack"}
+            is_sweet_default_slot_group(slot_group)
             and not is_savory_hint(user_hint)
         )
         if sweet_snack_focus:
@@ -894,7 +1098,7 @@ class MealPlannerService:
         hint_tokens = extract_hint_tokens(user_hint)
         slot_group = canonical_slot_group(meal_slot)
         is_sweet_slot = (
-            slot_group in {"breakfast", "morning_snack", "snack"}
+            is_sweet_default_slot_group(slot_group)
             and not is_savory_hint(user_hint)
         )
 
@@ -909,19 +1113,16 @@ class MealPlannerService:
                 )
                 break
 
-        # 2. Check snack/breakfast culinary coherence (no chicken/fish/pasta entrees unless requested)
-        savory_entree_cats = {"poultry", "red_meat", "fish", "pasta", "rice", "legumes"}
+        # 2. Check snack/breakfast culinary coherence (no deli meats, chicken/fish/pasta, or savory veggies unless requested)
         if is_sweet_slot:
             for skel, ings in candidates:
-                for ing in ings:
-                    if ing.food is None:
-                        continue
-                    if ing.food.category.lower() in savory_entree_cats:
-                        issues.append(
-                            f"Option '{skel.title}' includes a savory lunch/dinner ingredient "
-                            f"('{ing.name}'); propose light sweet/neutral snack ideas suitable for {meal_slot}."
-                        )
-                        break
+                savory_bad = _find_sweet_slot_savory_item(ings)
+                if savory_bad is not None:
+                    issues.append(
+                        f"Option '{skel.title}' includes a savory lunch/dinner ingredient "
+                        f"('{savory_bad}'); propose light sweet/neutral snack ideas suitable for {meal_slot}."
+                    )
+                    break
 
         # 3. Check same-day repetition of primary savory/protein anchors unless requested in user_hint
         eaten_norms = [
@@ -1003,6 +1204,90 @@ class MealPlannerService:
                         )
 
         return list(dict.fromkeys(issues))
+
+    @staticmethod
+    def _detect_day_plan_quality_issues(
+        day_meals: list[tuple[PlannedMealSkeleton, list[ScalableIngredientInput]]],
+        *,
+        slots: list[MealSlotConfig],
+        notes: str = "",
+    ) -> list[str]:
+        """Flag sweet-snack savory intrusions, unresolved foods, or same-day main-meal duplicates."""
+        issues: list[str] = []
+        wants_savory = is_savory_hint(notes)
+        slot_by_name = {s.name: s for s in slots}
+        lunch_sig: tuple[str, str] | None = None
+        dinner_sig: tuple[str, str] | None = None
+
+        for skel, ings in day_meals:
+            if ings:
+                missing = sum(1 for i in ings if i.food is None)
+                if missing / len(ings) > 0.25:
+                    issues.append(
+                        f"Meal '{skel.title}' ({skel.meal_slot}) has unresolved ingredients."
+                    )
+            slot_cfg = slot_by_name.get(skel.meal_slot)
+            grp = (
+                effective_slot_group(slot_cfg, slots)
+                if slot_cfg is not None
+                else canonical_slot_group(skel.meal_slot)
+            )
+            if is_sweet_default_slot_group(grp) and not wants_savory:
+                savory_bad = _find_sweet_slot_savory_item(ings)
+                if savory_bad is not None:
+                    issues.append(
+                        f"Slot '{skel.meal_slot}' ('{skel.title}') contains '{savory_bad}': "
+                        "snacks and breakfasts must be sweet/light (yogurt, fruit, oats, rusks, ricotta, nut butter), "
+                        "NEVER bresaola, meat, fish, legumes, or savory vegetables."
+                    )
+            elif grp == "lunch":
+                lunch_sig = _primary_anchor_pair(ings)
+            elif grp == "dinner":
+                dinner_sig = _primary_anchor_pair(ings)
+
+        if (
+            lunch_sig is not None
+            and dinner_sig is not None
+            and lunch_sig[0]
+            and lunch_sig[0] == dinner_sig[0]
+        ):
+            issues.append(
+                f"Lunch and Dinner share the same protein ('{lunch_sig[0]}'); use distinct proteins across Lunch and Dinner."
+            )
+        if (
+            lunch_sig is not None
+            and dinner_sig is not None
+            and lunch_sig[1]
+            and lunch_sig[1] == dinner_sig[1]
+        ):
+            issues.append(
+                f"Lunch and Dinner share the same carb base ('{lunch_sig[1]}'); vary carb bases across Lunch and Dinner."
+            )
+        return list(dict.fromkeys(issues))
+
+    @staticmethod
+    def _detect_swap_quality_issues(
+        candidate: tuple[PlannedMealSkeleton, list[ScalableIngredientInput]],
+        *,
+        meal_slot: str,
+        user_instruction: str = "",
+    ) -> list[str]:
+        """Flag sweet-snack savory intrusions or unresolved ingredients on single-slot swap."""
+        skel, ings = candidate
+        issues: list[str] = []
+        if ings:
+            missing = sum(1 for i in ings if i.food is None)
+            if missing / len(ings) > 0.25:
+                issues.append(f"Replacement '{skel.title}' has unresolved ingredients.")
+        grp = canonical_slot_group(meal_slot)
+        if is_sweet_default_slot_group(grp) and not is_savory_hint(user_instruction):
+            savory_bad = _find_sweet_slot_savory_item(ings)
+            if savory_bad is not None:
+                issues.append(
+                    f"Slot '{meal_slot}' replacement '{skel.title}' includes savory '{savory_bad}'; "
+                    "keep snacks sweet/light unless savory was explicitly requested."
+                )
+        return issues
 
     @staticmethod
     def _build_plan_item(
