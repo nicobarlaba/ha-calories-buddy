@@ -169,16 +169,58 @@ async def test_services_and_websocket_multi_user_isolation(
             "person_id": "person_giulia",
             "query": "Test Yogurt",
             "include_external": False,
+            "limit": 10,
+            "offset": 0,
         }
     )
     msg7 = await client.receive_json()
     assert msg7["success"] is True
     assert msg7["result"]["foods"][0]["has_override"] is False
     assert msg7["result"]["foods"][0]["macros_per_100g"]["kcal"] == 60.0
+    assert msg7["result"]["total_count"] >= 1
+    assert msg7["result"]["offset"] == 0
+    assert msg7["result"]["limit"] == 10
+    assert msg7["result"]["has_more"] is False
+    assert "super-secret-do-not-leak" not in json.dumps(msg7)
+
+    # Vault pagination & category group filter across seeded catalog
+    await client.send_json(
+        {
+            "id": 70,
+            "type": f"{DOMAIN}/search_foods",
+            "person_id": "person_admin",
+            "query": "",
+            "category": "carbs",
+            "include_external": False,
+            "limit": 5,
+            "offset": 0,
+        }
+    )
+    msg70 = await client.receive_json()
+    assert msg70["success"] is True
+    assert len(msg70["result"]["foods"]) == 5
+    assert msg70["result"]["total_count"] > 5
+    assert msg70["result"]["has_more"] is True
+    assert "super-secret-do-not-leak" not in json.dumps(msg70)
+
+    # Update meal slot inline via WS
+    await client.send_json(
+        {
+            "id": 71,
+            "type": f"{DOMAIN}/update_meal_slot",
+            "log_id": log_id,
+            "meal_slot": "Cena",
+        }
+    )
+    msg71 = await client.receive_json()
+    assert msg71["success"] is True
+    assert msg71["result"]["meal_log"]["meal_slot"] == "Cena"
+    assert "super-secret-do-not-leak" not in json.dumps(msg71)
 
     await client.send_json(
-        {"id": 8, "type": f"{DOMAIN}/log_weight", "weight_kg": 78.4}
+        {"id": 72, "type": f"{DOMAIN}/log_weight", "weight_kg": 78.4}
     )
     msg8 = await client.receive_json()
     assert msg8["success"] is True
     assert msg8["result"]["snapshot"]["weight_kg"] == pytest.approx(78.4)
+    assert "super-secret-do-not-leak" not in json.dumps(msg8)

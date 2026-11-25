@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import aiosqlite
@@ -359,6 +359,60 @@ class MealRepository:
                 ),
             )
             return bool(cursor.rowcount > 0)
+
+    async def update_meal_slot(
+        self, person_id: str, log_id: str, meal_slot: str
+    ) -> MealLog | None:
+        """Reassign the meal_slot label of an existing meal log."""
+        async with self._db.transaction() as conn:
+            cursor = await conn.execute(
+                """
+                UPDATE meal_logs
+                SET meal_slot = ?
+                WHERE log_id = ? AND person_id = ? AND status != ?
+                """,
+                (meal_slot, log_id, person_id, MealStatus.DELETED.value),
+            )
+            if cursor.rowcount <= 0:
+                return None
+        return await self.get_meal_log(log_id)
+
+    async def get_recent_meal_titles(
+        self, person_id: str, days: int = 7, reference_date: date | None = None
+    ) -> list[str]:
+        """Return recent meal dish titles/descriptions from the past N days for variety."""
+        end_d = reference_date or date.today()
+        start_d = end_d - timedelta(days=max(1, days))
+        plan_rows = await self._db.fetch_all(
+            """
+            SELECT DISTINCT mpi.title
+            FROM meal_plan_items mpi
+            JOIN meal_plan_days mpd ON mpi.plan_day_id = mpd.plan_day_id
+            JOIN meal_plans mp ON mpd.plan_id = mp.plan_id
+            WHERE mp.person_id = ? AND mpd.plan_date >= ? AND mpd.plan_date <= ?
+            ORDER BY mpd.plan_date DESC
+            LIMIT 25
+            """,
+            (person_id, start_d.isoformat(), end_d.isoformat()),
+        )
+        titles = [str(r["title"]) for r in plan_rows if r["title"]]
+        if len(titles) < 15:
+            log_rows = await self._db.fetch_all(
+                """
+                SELECT ml.raw_input_text, ml.meal_slot
+                FROM meal_logs ml
+                WHERE ml.person_id = ? AND ml.log_date >= ? AND ml.status = ?
+                  AND ml.raw_input_text IS NOT NULL AND ml.raw_input_text != ''
+                ORDER BY ml.log_date DESC, ml.logged_at DESC
+                LIMIT 15
+                """,
+                (person_id, start_d.isoformat(), MealStatus.CONFIRMED.value),
+            )
+            for row in log_rows:
+                txt = str(row["raw_input_text"]).strip()
+                if txt and txt not in titles:
+                    titles.append(txt[:80])
+        return titles[:25]
 
     async def get_top_frequent_foods(
         self, person_id: str, limit: int = 25

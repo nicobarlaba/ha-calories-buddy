@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "ha_calories_buddy"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 STORAGE_DB_FILENAME = "ha_calories_buddy.db"
 
@@ -24,6 +24,7 @@ CONF_LLM_PROVIDER = "llm_provider"
 CONF_LLM_API_KEY = "llm_api_key"
 CONF_LLM_BASE_URL = "llm_base_url"
 CONF_LLM_MODEL = "llm_model"
+CONF_AI_TASK_ENTITY = "ai_task_entity"
 CONF_LLM_TEMPERATURE = "llm_temperature"
 CONF_LANGUAGE = "language"
 CONF_USDA_API_KEY = "usda_api_key"
@@ -56,10 +57,12 @@ CONF_MANUAL_KCAL = "manual_kcal"
 CONF_MANUAL_PROTEIN_G = "manual_protein_g"
 CONF_MANUAL_CARBS_G = "manual_carbs_g"
 CONF_MANUAL_FAT_G = "manual_fat_g"
+CONF_MANUAL_FIBER_G = "manual_fiber_g"
 CONF_MANUAL_TRAINING_KCAL = "manual_training_kcal"
 CONF_MANUAL_TRAINING_PROTEIN_G = "manual_training_protein_g"
 CONF_MANUAL_TRAINING_CARBS_G = "manual_training_carbs_g"
 CONF_MANUAL_TRAINING_FAT_G = "manual_training_fat_g"
+CONF_MANUAL_TRAINING_FIBER_G = "manual_training_fiber_g"
 
 # Config keys — Entity Mappings
 CONF_WEIGHT_ENTITY = "weight_entity"
@@ -91,6 +94,7 @@ ATWATER_TOLERANCE_KCAL = 25.0
 
 # LLM Provider identifiers
 LLM_PROVIDER_NONE = "none"
+LLM_PROVIDER_HA_AI_TASK = "ha_ai_task"
 LLM_PROVIDER_OPENAI = "openai"
 LLM_PROVIDER_ANTHROPIC = "anthropic"
 LLM_PROVIDER_GEMINI = "gemini"
@@ -99,6 +103,7 @@ LLM_PROVIDER_OPENAI_COMPAT = "openai_compatible"
 
 LLM_PROVIDERS = [
     LLM_PROVIDER_NONE,
+    LLM_PROVIDER_HA_AI_TASK,
     LLM_PROVIDER_OPENAI,
     LLM_PROVIDER_ANTHROPIC,
     LLM_PROVIDER_GEMINI,

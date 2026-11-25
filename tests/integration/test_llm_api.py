@@ -25,7 +25,7 @@ from tests.integration.conftest import setup_hub_and_persons
 
 
 async def test_assist_llm_api_tools(hass: HomeAssistant) -> None:
-    """Verify Assist llm.API registers 3 tools returning ToolResult cleanly."""
+    """Verify Assist llm.API registers 7 tools returning ToolResult cleanly."""
     await setup_hub_and_persons(
         hass,
         hub_data={
@@ -61,6 +61,10 @@ async def test_assist_llm_api_tools(hass: HomeAssistant) -> None:
         "log_meal",
         "correct_last_meal",
         "get_today_nutrition_summary",
+        "suggest_meal",
+        "generate_meal_plan",
+        "swap_plan_meal",
+        "rebalance_today",
     }
 
     parsed_lunch = json.dumps(
@@ -111,26 +115,35 @@ async def test_assist_llm_api_tools(hass: HomeAssistant) -> None:
         assert isinstance(log_res, llm.ToolResult)
         assert log_res.error is False
         assert log_res.data["person"] == "Marco"
+        assert log_res.data["meal_slot"] == "Pranzo"
         assert log_res.data["status"] == "confirmed"
         assert log_res.data["kcal"] == pytest.approx(660.0, abs=1.0)
+        assert float(log_res.data["fiber_g"]) > 0.0
 
-        # Correct lentils from 250g to 150g via Assist tool
+        # Correct lentils from 250g to 150g AND move meal_slot to Cena via Assist tool
         corr_res = await api_instance.async_call_tool(
             llm.ToolInput(
                 tool_name="correct_last_meal",
-                tool_args={"item_name": "Lentils", "new_quantity": 150},
+                tool_args={
+                    "item_name": "Lenticchie",
+                    "new_quantity": 150,
+                    "new_meal_slot": "Cena",
+                },
             )
         )
         assert corr_res.error is False
+        assert corr_res.data["meal_slot"] == "Cena"
         assert corr_res.data["new_meal_kcal"] == pytest.approx(544.0, abs=1.0)
 
-        # Query today summary
+        # Query today summary including fiber metrics
         summary_res = await api_instance.async_call_tool(
             llm.ToolInput(tool_name="get_today_nutrition_summary", tool_args={})
         )
         assert summary_res.error is False
         assert summary_res.data["person"] == "Marco"
         assert summary_res.data["consumed_kcal"] == pytest.approx(544.0, abs=1.0)
+        assert float(summary_res.data["fiber_consumed_g"]) > 0.0
+        assert float(summary_res.data["fiber_target_g"]) >= 20.0
 
         # Shared satellite without user_id -> returns clean ambiguity error
         anon_ctx = llm.LLMContext(

@@ -2,7 +2,11 @@
   {
     "food_id": "seed_basmati_rice_raw",
     "name": "Basmati Rice (Raw)",
-    "aliases": ["riso basmati", "basmati rice", "riso basmati crudo"],
+    "aliases": [
+      "riso basmati",
+      "basmati rice",
+      "riso basmati crudo"
+    ],
     "category": "rice",
     "preparation_state": "raw",
     "kcal": 352,
@@ -11,12 +15,19 @@
     "fat_g": 0.5,
     "fiber_g": 1.4,
     "yield_factor": 2.5,
-    "portions": []
+    "portions": [],
+    "name_it": "Riso Basmati (Crudo)"
   },
   {
     "food_id": "seed_white_rice_raw",
     "name": "White Rice (Raw)",
-    "aliases": ["riso bianco", "riso carnaroli", "riso arborio", "white rice", "riso"],
+    "aliases": [
+      "riso bianco",
+      "riso carnaroli",
+      "riso arborio",
+      "white rice",
+      "riso"
+    ],
     "category": "rice",
     "preparation_state": "raw",
     "kcal": 354,
@@ -25,12 +36,17 @@
     "fat_g": 0.6,
     "fiber_g": 1.3,
     "yield_factor": 2.5,
-    "portions": []
+    "portions": [],
+    "name_it": "Riso Bianco / Carnaroli (Crudo)"
   },
   {
     "food_id": "seed_brown_rice_raw",
     "name": "Brown Rice (Raw)",
-    "aliases": ["riso integrale", "brown rice", "whole grain rice"],
+    "aliases": [
+      "riso integrale",
+      "brown rice",
+      "whole grain rice"
+    ],
     "category": "rice",
     "preparation_state": "raw",
     "kcal": 350,
@@ -39,12 +55,18 @@
     "fat_g": 2.2,
     "fiber_g": 3.5,
     "yield_factor": 2.5,
-    "portions": []
+    "portions": [],
+    "name_it": "Riso Integrale (Crudo)"
   },
   {
     "food_id": "seed_basmati_rice_cooked",
     "name": "Basmati Rice (Cooked)",
-    "aliases": ["riso basmati cotto", "cooked basmati rice"],
+    "aliases": [
+      "riso basmati cotto",
+      "cooked basmati rice",
+      "riso basmati",
+      "basmati rice"
+    ],
     "category": "rice",
     "preparation_state": "cooked",
     "kcal": 141,
@@ -53,12 +75,21 @@
     "fat_g": 0.2,
     "fiber_g": 0.6,
     "yield_factor": 2.5,
-    "portions": []
+    "portions": [],
+    "name_it": "Riso Basmati (Cotto)"
   },
   {
     "food_id": "seed_pasta_semolina_raw",
     "name": "Durum Wheat Pasta (Dry)",
-    "aliases": ["pasta", "pasta di semola", "spaghetti", "penne", "fusilli", "rigatoni", "durum wheat pasta"],
+    "aliases": [
+      "pasta",
+      "pasta di semola",
+      "spaghetti",
+      "penne",
+      "fusilli",
+      "rigatoni",
+      "durum wheat pasta"
+    ],
     "category": "pasta",
     "preparation_state": "raw",
     "kcal": 357,
@@ -67,12 +98,18 @@
     "fat_g": 1.5,
     "fiber_g": 3.0,
     "yield_factor": 2.2,
-    "portions": []
+    "portions": [],
+    "name_it": "Pasta di Semola (Cruda)"
   },
   {
     "food_id": "seed_pasta_wholewheat_raw",
     "name": "Whole Wheat Pasta (Dry)",
-    "aliases": ["pasta integrale", "whole wheat pasta", "wholemeal pasta", "spaghetti integrali"],
+    "aliases": [
+      "pasta integrale",
+      "whole wheat pasta",
+      "wholemeal pasta",
+      "spaghetti integrali"
+    ],
     "category": "pasta",
     "preparation_state": "raw",
     "kcal": 344,
@@ -81,12 +118,22 @@
     "fat_g": 2.0,
     "fiber_g": 7.5,
     "yield_factor": 2.2,
-    "portions": []
+    "portions": [],
+    "name_it": "Pasta Integrale (Cruda)"
   },
   {
     "food_id": "seed_pasta_semolina_cooked",
     "name": "Durum Wheat Pasta (Cooked)",
-    "aliases": ["pasta cotta", "cooked pasta", "spaghetti cotti"],
+    "aliases": [
+      "pasta cotta",
+      "cooked pasta",
+      "spaghetti cotti",
+      "pasta",
+      "spaghetti",
+      "penne",
+      "fusilli",
+      "rigatoni"
+    ],
     "category": "pasta",
     "preparation_state": "cooked",
     "kcal": 162,
@@ -95,12 +142,19 @@
     "fat_g": 0.7,
     "fiber_g": 1.4,
     "yield_factor": 2.2,
-    "portions": []
+    "portions": [],
+    "name_it": "Pasta di Semola (Cotta)"
   },
   {
     "food_id": "seed_rolled_oats_raw",
     "name": "Rolled Oats (Raw)",
-    "aliases": ["fiocchi d'avena", "avena", "rolled oats", "oats", "oatmeal"],
+    "aliases": [
+      "fiocchi d'avena",
+      "avena",
+      "rolled oats",
+      "oats",
+      "oatmeal"
+    ],
     "category": "oats",
     "preparation_state": "raw",
     "kcal": 374,
@@ -109,12 +163,21 @@
     "fat_g": 7.0,
     "fiber_g": 10.1,
     "yield_factor": 2.8,
-    "portions": [{"unit_name": "tbsp", "grams": 10.0}]
+    "portions": [
+      {
+        "unit_name": "tbsp",
+        "grams": 10.0
+      }
+    ],
+    "name_it": "Fiocchi d'Avena (Crudi)"
   },
   {
     "food_id": "seed_quinoa_raw",
     "name": "Quinoa (Raw)",
-    "aliases": ["quinoa", "quinoa cruda"],
+    "aliases": [
+      "quinoa",
+      "quinoa cruda"
+    ],
     "category": "grains",
     "preparation_state": "raw",
     "kcal": 368,
@@ -123,12 +186,17 @@
     "fat_g": 6.1,
     "fiber_g": 7.0,
     "yield_factor": 2.6,
-    "portions": []
+    "portions": [],
+    "name_it": "Quinoa (Cruda)"
   },
   {
     "food_id": "seed_farro_raw",
     "name": "Spelt / Farro (Raw)",
-    "aliases": ["farro", "spelt", "farro perlato"],
+    "aliases": [
+      "farro",
+      "spelt",
+      "farro perlato"
+    ],
     "category": "grains",
     "preparation_state": "raw",
     "kcal": 338,
@@ -137,12 +205,21 @@
     "fat_g": 2.4,
     "fiber_g": 6.5,
     "yield_factor": 2.5,
-    "portions": []
+    "portions": [],
+    "name_it": "Farro (Crudo)"
   },
   {
     "food_id": "seed_olive_oil",
     "name": "Extra Virgin Olive Oil",
-    "aliases": ["olio di oliva", "olio d'oliva", "olio extravergine di oliva", "olio evo", "olio", "olive oil", "extra virgin olive oil"],
+    "aliases": [
+      "olio di oliva",
+      "olio d'oliva",
+      "olio extravergine di oliva",
+      "olio evo",
+      "olio",
+      "olive oil",
+      "extra virgin olive oil"
+    ],
     "category": "oil",
     "preparation_state": "ready_to_eat",
     "kcal": 884,
@@ -152,14 +229,26 @@
     "fiber_g": 0.0,
     "yield_factor": 1.0,
     "portions": [
-      {"unit_name": "tbsp", "grams": 10.0, "description": "1 tablespoon olive oil"},
-      {"unit_name": "tsp", "grams": 4.0, "description": "1 teaspoon olive oil"}
-    ]
+      {
+        "unit_name": "tbsp",
+        "grams": 10.0,
+        "description": "1 tablespoon olive oil"
+      },
+      {
+        "unit_name": "tsp",
+        "grams": 4.0,
+        "description": "1 teaspoon olive oil"
+      }
+    ],
+    "name_it": "Olio Extravergine di Oliva"
   },
   {
     "food_id": "seed_butter",
     "name": "Butter",
-    "aliases": ["burro", "butter"],
+    "aliases": [
+      "burro",
+      "butter"
+    ],
     "category": "oil",
     "preparation_state": "ready_to_eat",
     "kcal": 717,
@@ -169,14 +258,28 @@
     "fiber_g": 0.0,
     "yield_factor": 1.0,
     "portions": [
-      {"unit_name": "tbsp", "grams": 14.0},
-      {"unit_name": "tsp", "grams": 5.0}
-    ]
+      {
+        "unit_name": "tbsp",
+        "grams": 14.0
+      },
+      {
+        "unit_name": "tsp",
+        "grams": 5.0
+      }
+    ],
+    "name_it": "Burro"
   },
   {
     "food_id": "seed_lentils_cooked",
     "name": "Lentils (Cooked / Boiled)",
-    "aliases": ["lenticchie cotte", "lenticchie lessate", "lenticchie in scatola", "cooked lentils", "boiled lentils", "lenticchie"],
+    "aliases": [
+      "lenticchie cotte",
+      "lenticchie lessate",
+      "lenticchie in scatola",
+      "cooked lentils",
+      "boiled lentils",
+      "lenticchie"
+    ],
     "category": "legumes",
     "preparation_state": "cooked",
     "kcal": 116,
@@ -186,13 +289,25 @@
     "fiber_g": 7.9,
     "yield_factor": 2.4,
     "portions": [
-      {"unit_name": "can", "grams": 240.0, "description": "Drained 400g tin"}
-    ]
+      {
+        "unit_name": "can",
+        "grams": 240.0,
+        "description": "Drained 400g tin"
+      }
+    ],
+    "name_it": "Lenticchie (Cotte / Lessate)"
   },
   {
     "food_id": "seed_lentils_raw",
     "name": "Lentils (Dry / Raw)",
-    "aliases": ["lenticchie secche", "lenticchie crude", "dry lentils", "raw lentils"],
+    "aliases": [
+      "lenticchie secche",
+      "lenticchie crude",
+      "dry lentils",
+      "raw lentils",
+      "lenticchie",
+      "lentils"
+    ],
     "category": "legumes",
     "preparation_state": "raw",
     "kcal": 316,
@@ -201,12 +316,19 @@
     "fat_g": 1.1,
     "fiber_g": 11.0,
     "yield_factor": 2.4,
-    "portions": []
+    "portions": [],
+    "name_it": "Lenticchie (Secche / Crude)"
   },
   {
     "food_id": "seed_chickpeas_cooked",
     "name": "Chickpeas (Cooked / Drained)",
-    "aliases": ["ceci cotti", "ceci in scatola", "ceci lessati", "cooked chickpeas", "chickpeas"],
+    "aliases": [
+      "ceci cotti",
+      "ceci in scatola",
+      "ceci lessati",
+      "cooked chickpeas",
+      "chickpeas"
+    ],
     "category": "legumes",
     "preparation_state": "cooked",
     "kcal": 139,
@@ -216,13 +338,25 @@
     "fiber_g": 6.5,
     "yield_factor": 2.3,
     "portions": [
-      {"unit_name": "can", "grams": 240.0, "description": "Drained 400g tin"}
-    ]
+      {
+        "unit_name": "can",
+        "grams": 240.0,
+        "description": "Drained 400g tin"
+      }
+    ],
+    "name_it": "Ceci (Cotti / Sgocciolati)"
   },
   {
     "food_id": "seed_chickpeas_raw",
     "name": "Chickpeas (Dry / Raw)",
-    "aliases": ["ceci secchi", "ceci crudi", "dry chickpeas", "raw chickpeas"],
+    "aliases": [
+      "ceci secchi",
+      "ceci crudi",
+      "dry chickpeas",
+      "raw chickpeas",
+      "ceci",
+      "chickpeas"
+    ],
     "category": "legumes",
     "preparation_state": "raw",
     "kcal": 347,
@@ -231,12 +365,19 @@
     "fat_g": 6.0,
     "fiber_g": 12.2,
     "yield_factor": 2.3,
-    "portions": []
+    "portions": [],
+    "name_it": "Ceci (Secchi / Crudi)"
   },
   {
     "food_id": "seed_cannellini_beans_cooked",
     "name": "White Beans / Cannellini (Cooked)",
-    "aliases": ["fagioli cannellini", "fagioli cotti", "fagioli borlotti cotti", "white beans cooked", "cannellini beans"],
+    "aliases": [
+      "fagioli cannellini",
+      "fagioli cotti",
+      "fagioli borlotti cotti",
+      "white beans cooked",
+      "cannellini beans"
+    ],
     "category": "legumes",
     "preparation_state": "cooked",
     "kcal": 118,
@@ -246,13 +387,22 @@
     "fiber_g": 6.3,
     "yield_factor": 2.4,
     "portions": [
-      {"unit_name": "can", "grams": 240.0}
-    ]
+      {
+        "unit_name": "can",
+        "grams": 240.0
+      }
+    ],
+    "name_it": "Fagioli Cannellini (Cotti)"
   },
   {
     "food_id": "seed_peas_raw",
     "name": "Green Peas (Fresh / Frozen)",
-    "aliases": ["piselli", "piselli surgelati", "green peas", "peas"],
+    "aliases": [
+      "piselli",
+      "piselli surgelati",
+      "green peas",
+      "peas"
+    ],
     "category": "vegetables",
     "preparation_state": "raw",
     "kcal": 81,
@@ -261,12 +411,18 @@
     "fat_g": 0.4,
     "fiber_g": 5.1,
     "yield_factor": 0.95,
-    "portions": []
+    "portions": [],
+    "name_it": "Piselli (Freschi / Surgelati)"
   },
   {
     "food_id": "seed_chicken_breast_raw",
     "name": "Chicken Breast (Raw)",
-    "aliases": ["petto di pollo", "pollo", "chicken breast", "raw chicken breast"],
+    "aliases": [
+      "petto di pollo",
+      "pollo",
+      "chicken breast",
+      "raw chicken breast"
+    ],
     "category": "poultry",
     "preparation_state": "raw",
     "kcal": 110,
@@ -275,12 +431,26 @@
     "fat_g": 1.9,
     "fiber_g": 0.0,
     "yield_factor": 0.75,
-    "portions": [{"unit_name": "piece", "grams": 150.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 150.0
+      }
+    ],
+    "name_it": "Petto di Pollo (Crudo)"
   },
   {
     "food_id": "seed_chicken_breast_cooked",
     "name": "Chicken Breast (Cooked / Grilled)",
-    "aliases": ["petto di pollo cotto", "pollo alla piastra", "cooked chicken breast", "grilled chicken"],
+    "aliases": [
+      "petto di pollo cotto",
+      "pollo alla piastra",
+      "cooked chicken breast",
+      "grilled chicken",
+      "petto di pollo",
+      "pollo",
+      "chicken breast"
+    ],
     "category": "poultry",
     "preparation_state": "cooked",
     "kcal": 147,
@@ -289,12 +459,18 @@
     "fat_g": 2.5,
     "fiber_g": 0.0,
     "yield_factor": 0.75,
-    "portions": []
+    "portions": [],
+    "name_it": "Petto di Pollo (Cotto / Piastra)"
   },
   {
     "food_id": "seed_turkey_breast_raw",
     "name": "Turkey Breast (Raw)",
-    "aliases": ["petto di tacchino", "fesa di tacchino", "tacchino", "turkey breast"],
+    "aliases": [
+      "petto di tacchino",
+      "fesa di tacchino",
+      "tacchino",
+      "turkey breast"
+    ],
     "category": "poultry",
     "preparation_state": "raw",
     "kcal": 107,
@@ -303,12 +479,17 @@
     "fat_g": 1.2,
     "fiber_g": 0.0,
     "yield_factor": 0.75,
-    "portions": []
+    "portions": [],
+    "name_it": "Petto di Tacchino (Crudo)"
   },
   {
     "food_id": "seed_turkey_deli",
     "name": "Roasted Turkey Breast Deli Slices",
-    "aliases": ["fesa di tacchino arrosto", "affettato di tacchino", "turkey deli slices"],
+    "aliases": [
+      "fesa di tacchino arrosto",
+      "affettato di tacchino",
+      "turkey deli slices"
+    ],
     "category": "poultry",
     "preparation_state": "ready_to_eat",
     "kcal": 104,
@@ -317,12 +498,24 @@
     "fat_g": 1.3,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "slice", "grams": 20.0}]
+    "portions": [
+      {
+        "unit_name": "slice",
+        "grams": 20.0
+      }
+    ],
+    "name_it": "Fesa di Tacchino Arrosto (Affettato)"
   },
   {
     "food_id": "seed_lean_beef_raw",
     "name": "Lean Beef Steak / Mince (Raw)",
-    "aliases": ["manzo magro", "carne di manzo", "macinato magro", "fettina di manzo", "lean beef"],
+    "aliases": [
+      "manzo magro",
+      "carne di manzo",
+      "macinato magro",
+      "fettina di manzo",
+      "lean beef"
+    ],
     "category": "red_meat",
     "preparation_state": "raw",
     "kcal": 135,
@@ -331,12 +524,16 @@
     "fat_g": 5.4,
     "fiber_g": 0.0,
     "yield_factor": 0.72,
-    "portions": []
+    "portions": [],
+    "name_it": "Manzo Magro / Macinato (Crudo)"
   },
   {
     "food_id": "seed_bresaola",
     "name": "Bresaola",
-    "aliases": ["bresaola", "bresaola della valtellina"],
+    "aliases": [
+      "bresaola",
+      "bresaola della valtellina"
+    ],
     "category": "red_meat",
     "preparation_state": "ready_to_eat",
     "kcal": 151,
@@ -345,12 +542,22 @@
     "fat_g": 2.3,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "slice", "grams": 15.0}]
+    "portions": [
+      {
+        "unit_name": "slice",
+        "grams": 15.0
+      }
+    ],
+    "name_it": "Bresaola"
   },
   {
     "food_id": "seed_prosciutto_crudo_lean",
     "name": "Prosciutto Crudo (Lean)",
-    "aliases": ["prosciutto crudo", "prosciutto di parma", "cured ham"],
+    "aliases": [
+      "prosciutto crudo",
+      "prosciutto di parma",
+      "cured ham"
+    ],
     "category": "red_meat",
     "preparation_state": "ready_to_eat",
     "kcal": 195,
@@ -359,12 +566,23 @@
     "fat_g": 9.2,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "slice", "grams": 18.0}]
+    "portions": [
+      {
+        "unit_name": "slice",
+        "grams": 18.0
+      }
+    ],
+    "name_it": "Prosciutto Crudo (Magro)"
   },
   {
     "food_id": "seed_pork_tenderloin_raw",
     "name": "Pork Tenderloin (Raw)",
-    "aliases": ["lonza di maiale", "filetto di maiale", "pork tenderloin", "pork loin"],
+    "aliases": [
+      "lonza di maiale",
+      "filetto di maiale",
+      "pork tenderloin",
+      "pork loin"
+    ],
     "category": "red_meat",
     "preparation_state": "raw",
     "kcal": 122,
@@ -373,12 +591,19 @@
     "fat_g": 4.2,
     "fiber_g": 0.0,
     "yield_factor": 0.75,
-    "portions": []
+    "portions": [],
+    "name_it": "Lonza / Filetto di Maiale (Crudo)"
   },
   {
     "food_id": "seed_salmon_raw",
     "name": "Atlantic Salmon (Raw)",
-    "aliases": ["salmone", "salmone fresco", "filetto di salmone", "salmon", "atlantic salmon"],
+    "aliases": [
+      "salmone",
+      "salmone fresco",
+      "filetto di salmone",
+      "salmon",
+      "atlantic salmon"
+    ],
     "category": "fish",
     "preparation_state": "raw",
     "kcal": 182,
@@ -386,13 +611,22 @@
     "carbs_g": 0.0,
     "fat_g": 11.3,
     "fiber_g": 0.0,
-    "yield_factor": 0.80,
-    "portions": [{"unit_name": "piece", "grams": 150.0}]
+    "yield_factor": 0.8,
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 150.0
+      }
+    ],
+    "name_it": "Salmone Fresco (Crudo)"
   },
   {
     "food_id": "seed_smoked_salmon",
     "name": "Smoked Salmon",
-    "aliases": ["salmone affumicato", "smoked salmon"],
+    "aliases": [
+      "salmone affumicato",
+      "smoked salmon"
+    ],
     "category": "fish",
     "preparation_state": "ready_to_eat",
     "kcal": 168,
@@ -401,12 +635,24 @@
     "fat_g": 9.1,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "slice", "grams": 25.0}]
+    "portions": [
+      {
+        "unit_name": "slice",
+        "grams": 25.0
+      }
+    ],
+    "name_it": "Salmone Affumicato"
   },
   {
     "food_id": "seed_cod_raw",
     "name": "Cod Fillet (Raw)",
-    "aliases": ["merluzzo", "filetto di merluzzo", "nasello", "cod", "cod fillet"],
+    "aliases": [
+      "merluzzo",
+      "filetto di merluzzo",
+      "nasello",
+      "cod",
+      "cod fillet"
+    ],
     "category": "fish",
     "preparation_state": "raw",
     "kcal": 82,
@@ -414,13 +660,19 @@
     "carbs_g": 0.0,
     "fat_g": 0.9,
     "fiber_g": 0.0,
-    "yield_factor": 0.80,
-    "portions": []
+    "yield_factor": 0.8,
+    "portions": [],
+    "name_it": "Merluzzo / Nasello (Crudo)"
   },
   {
     "food_id": "seed_tuna_water_drained",
     "name": "Canned Tuna in Water (Drained)",
-    "aliases": ["tonno al naturale", "tonno in scatola al naturale", "canned tuna in water", "tuna in brine"],
+    "aliases": [
+      "tonno al naturale",
+      "tonno in scatola al naturale",
+      "canned tuna in water",
+      "tuna in brine"
+    ],
     "category": "fish",
     "preparation_state": "ready_to_eat",
     "kcal": 103,
@@ -429,12 +681,24 @@
     "fat_g": 1.0,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "can", "grams": 56.0, "description": "Standard 80g tin drained"}]
+    "portions": [
+      {
+        "unit_name": "can",
+        "grams": 56.0,
+        "description": "Standard 80g tin drained"
+      }
+    ],
+    "name_it": "Tonno al Naturale (Sgocciolato)"
   },
   {
     "food_id": "seed_tuna_olive_oil_drained",
     "name": "Canned Tuna in Olive Oil (Drained)",
-    "aliases": ["tonno sott'olio", "tonno all'olio d'oliva", "tonno in scatola", "canned tuna in olive oil"],
+    "aliases": [
+      "tonno sott'olio",
+      "tonno all'olio d'oliva",
+      "tonno in scatola",
+      "canned tuna in olive oil"
+    ],
     "category": "fish",
     "preparation_state": "ready_to_eat",
     "kcal": 192,
@@ -443,12 +707,26 @@
     "fat_g": 10.2,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "can", "grams": 52.0, "description": "Standard 80g tin drained"}]
+    "portions": [
+      {
+        "unit_name": "can",
+        "grams": 52.0,
+        "description": "Standard 80g tin drained"
+      }
+    ],
+    "name_it": "Tonno all'Olio d'Oliva (Sgocciolato)"
   },
   {
     "food_id": "seed_whole_egg",
     "name": "Whole Chicken Egg",
-    "aliases": ["uovo", "uova", "uovo intero", "egg", "eggs", "whole egg"],
+    "aliases": [
+      "uovo",
+      "uova",
+      "uovo intero",
+      "egg",
+      "eggs",
+      "whole egg"
+    ],
     "category": "egg",
     "preparation_state": "ready_to_eat",
     "kcal": 143,
@@ -457,12 +735,25 @@
     "fat_g": 9.9,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 55.0, "description": "1 medium egg"}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 55.0,
+        "description": "1 medium egg"
+      }
+    ],
+    "name_it": "Uovo Intero"
   },
   {
     "food_id": "seed_egg_whites",
     "name": "Egg Whites",
-    "aliases": ["albume", "albumi", "albume d'uovo", "egg whites", "egg white"],
+    "aliases": [
+      "albume",
+      "albumi",
+      "albume d'uovo",
+      "egg whites",
+      "egg white"
+    ],
     "category": "egg",
     "preparation_state": "ready_to_eat",
     "kcal": 52,
@@ -471,12 +762,24 @@
     "fat_g": 0.2,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 35.0, "description": "1 egg white"}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 35.0,
+        "description": "1 egg white"
+      }
+    ],
+    "name_it": "Albume d'Uovo"
   },
   {
     "food_id": "seed_milk_semi_skimmed",
     "name": "Semi-Skimmed Milk",
-    "aliases": ["latte parzialmente scremato", "latte", "semi-skimmed milk", "milk"],
+    "aliases": [
+      "latte parzialmente scremato",
+      "latte",
+      "semi-skimmed milk",
+      "milk"
+    ],
     "category": "dairy",
     "preparation_state": "ready_to_eat",
     "kcal": 46,
@@ -485,12 +788,21 @@
     "fat_g": 1.5,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "cup", "grams": 240.0}]
+    "portions": [
+      {
+        "unit_name": "cup",
+        "grams": 240.0
+      }
+    ],
+    "name_it": "Latte Parzialmente Scremato"
   },
   {
     "food_id": "seed_milk_whole",
     "name": "Whole Milk",
-    "aliases": ["latte intero", "whole milk"],
+    "aliases": [
+      "latte intero",
+      "whole milk"
+    ],
     "category": "dairy",
     "preparation_state": "ready_to_eat",
     "kcal": 64,
@@ -499,12 +811,24 @@
     "fat_g": 3.5,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "cup", "grams": 240.0}]
+    "portions": [
+      {
+        "unit_name": "cup",
+        "grams": 240.0
+      }
+    ],
+    "name_it": "Latte Intero"
   },
   {
     "food_id": "seed_greek_yogurt_0",
     "name": "Greek Yogurt 0% Fat",
-    "aliases": ["yogurt greco 0%", "yogurt greco magro", "yogurt greco", "greek yogurt 0", "greek yogurt"],
+    "aliases": [
+      "yogurt greco 0%",
+      "yogurt greco magro",
+      "yogurt greco",
+      "greek yogurt 0",
+      "greek yogurt"
+    ],
     "category": "dairy",
     "preparation_state": "ready_to_eat",
     "kcal": 57,
@@ -513,12 +837,22 @@
     "fat_g": 0.2,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "pack", "grams": 150.0}]
+    "portions": [
+      {
+        "unit_name": "pack",
+        "grams": 150.0
+      }
+    ],
+    "name_it": "Yogurt Greco 0% Grassi"
   },
   {
     "food_id": "seed_greek_yogurt_5",
     "name": "Greek Yogurt 5% Fat",
-    "aliases": ["yogurt greco intero", "yogurt greco 5%", "greek yogurt full fat"],
+    "aliases": [
+      "yogurt greco intero",
+      "yogurt greco 5%",
+      "greek yogurt full fat"
+    ],
     "category": "dairy",
     "preparation_state": "ready_to_eat",
     "kcal": 96,
@@ -527,12 +861,23 @@
     "fat_g": 5.0,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "pack", "grams": 150.0}]
+    "portions": [
+      {
+        "unit_name": "pack",
+        "grams": 150.0
+      }
+    ],
+    "name_it": "Yogurt Greco 5% Grassi"
   },
   {
     "food_id": "seed_parmigiano",
     "name": "Parmigiano Reggiano / Grana",
-    "aliases": ["parmigiano", "parmigiano reggiano", "grana padano", "parmesan"],
+    "aliases": [
+      "parmigiano",
+      "parmigiano reggiano",
+      "grana padano",
+      "parmesan"
+    ],
     "category": "dairy",
     "preparation_state": "ready_to_eat",
     "kcal": 392,
@@ -541,12 +886,21 @@
     "fat_g": 28.9,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "tbsp", "grams": 10.0}]
+    "portions": [
+      {
+        "unit_name": "tbsp",
+        "grams": 10.0
+      }
+    ],
+    "name_it": "Parmigiano Reggiano / Grana"
   },
   {
     "food_id": "seed_mozzarella",
     "name": "Mozzarella",
-    "aliases": ["mozzarella", "fior di latte"],
+    "aliases": [
+      "mozzarella",
+      "fior di latte"
+    ],
     "category": "dairy",
     "preparation_state": "ready_to_eat",
     "kcal": 253,
@@ -555,12 +909,22 @@
     "fat_g": 19.5,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 125.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 125.0
+      }
+    ],
+    "name_it": "Mozzarella"
   },
   {
     "food_id": "seed_ricotta_cow",
     "name": "Cow Milk Ricotta",
-    "aliases": ["ricotta", "ricotta vaccina", "ricotta di mucca"],
+    "aliases": [
+      "ricotta",
+      "ricotta vaccina",
+      "ricotta di mucca"
+    ],
     "category": "dairy",
     "preparation_state": "ready_to_eat",
     "kcal": 146,
@@ -569,12 +933,16 @@
     "fat_g": 10.9,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": []
+    "portions": [],
+    "name_it": "Ricotta Vaccina"
   },
   {
     "food_id": "seed_cottage_cheese",
     "name": "Cottage Cheese / Fiocchi di Latte",
-    "aliases": ["fiocchi di latte", "cottage cheese"],
+    "aliases": [
+      "fiocchi di latte",
+      "cottage cheese"
+    ],
     "category": "dairy",
     "preparation_state": "ready_to_eat",
     "kcal": 98,
@@ -583,12 +951,24 @@
     "fat_g": 4.3,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "pack", "grams": 200.0}]
+    "portions": [
+      {
+        "unit_name": "pack",
+        "grams": 200.0
+      }
+    ],
+    "name_it": "Fiocchi di Latte"
   },
   {
     "food_id": "seed_white_bread",
     "name": "Artisan White Bread",
-    "aliases": ["pane", "pane bianco", "pane comune", "white bread", "bread"],
+    "aliases": [
+      "pane",
+      "pane bianco",
+      "pane comune",
+      "white bread",
+      "bread"
+    ],
     "category": "bread",
     "preparation_state": "ready_to_eat",
     "kcal": 265,
@@ -597,12 +977,22 @@
     "fat_g": 1.1,
     "fiber_g": 2.7,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "slice", "grams": 35.0}]
+    "portions": [
+      {
+        "unit_name": "slice",
+        "grams": 35.0
+      }
+    ],
+    "name_it": "Pane Comune / Bianco"
   },
   {
     "food_id": "seed_wholewheat_bread",
     "name": "Whole Wheat Bread",
-    "aliases": ["pane integrale", "whole wheat bread", "wholemeal bread"],
+    "aliases": [
+      "pane integrale",
+      "whole wheat bread",
+      "wholemeal bread"
+    ],
     "category": "bread",
     "preparation_state": "ready_to_eat",
     "kcal": 243,
@@ -611,12 +1001,22 @@
     "fat_g": 2.0,
     "fiber_g": 6.5,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "slice", "grams": 35.0}]
+    "portions": [
+      {
+        "unit_name": "slice",
+        "grams": 35.0
+      }
+    ],
+    "name_it": "Pane Integrale"
   },
   {
     "food_id": "seed_fette_biscottate",
     "name": "Crispbread / Rusk (Fette Biscottate)",
-    "aliases": ["fette biscottate", "rusks", "crispbread"],
+    "aliases": [
+      "fette biscottate",
+      "rusks",
+      "crispbread"
+    ],
     "category": "bread",
     "preparation_state": "ready_to_eat",
     "kcal": 408,
@@ -625,12 +1025,23 @@
     "fat_g": 6.5,
     "fiber_g": 4.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "slice", "grams": 8.5}]
+    "portions": [
+      {
+        "unit_name": "slice",
+        "grams": 8.5
+      }
+    ],
+    "name_it": "Fette Biscottate"
   },
   {
     "food_id": "seed_potatoes_raw",
     "name": "Potatoes (Raw)",
-    "aliases": ["patate", "patate crude", "potatoes", "potato"],
+    "aliases": [
+      "patate",
+      "patate crude",
+      "potatoes",
+      "potato"
+    ],
     "category": "potatoes",
     "preparation_state": "raw",
     "kcal": 77,
@@ -639,12 +1050,23 @@
     "fat_g": 0.1,
     "fiber_g": 2.2,
     "yield_factor": 0.95,
-    "portions": [{"unit_name": "piece", "grams": 150.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 150.0
+      }
+    ],
+    "name_it": "Patate (Crude)"
   },
   {
     "food_id": "seed_sweet_potatoes_raw",
     "name": "Sweet Potatoes (Raw)",
-    "aliases": ["patate dolci", "batate", "sweet potatoes", "sweet potato"],
+    "aliases": [
+      "patate dolci",
+      "batate",
+      "sweet potatoes",
+      "sweet potato"
+    ],
     "category": "potatoes",
     "preparation_state": "raw",
     "kcal": 86,
@@ -653,12 +1075,18 @@
     "fat_g": 0.1,
     "fiber_g": 3.0,
     "yield_factor": 0.92,
-    "portions": []
+    "portions": [],
+    "name_it": "Patate Dolci / Batate (Crude)"
   },
   {
     "food_id": "seed_tomatoes",
     "name": "Tomatoes",
-    "aliases": ["pomodori", "pomodorini", "tomatoes", "tomato"],
+    "aliases": [
+      "pomodori",
+      "pomodorini",
+      "tomatoes",
+      "tomato"
+    ],
     "category": "vegetables",
     "preparation_state": "ready_to_eat",
     "kcal": 18,
@@ -667,12 +1095,24 @@
     "fat_g": 0.2,
     "fiber_g": 1.2,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 120.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 120.0
+      }
+    ],
+    "name_it": "Pomodori"
   },
   {
     "food_id": "seed_tomato_passata",
     "name": "Tomato Passata / Puree",
-    "aliases": ["passata di pomodoro", "salsa di pomodoro", "polpa di pomodoro", "tomato passata", "tomato sauce"],
+    "aliases": [
+      "passata di pomodoro",
+      "salsa di pomodoro",
+      "polpa di pomodoro",
+      "tomato passata",
+      "tomato sauce"
+    ],
     "category": "vegetables",
     "preparation_state": "ready_to_eat",
     "kcal": 29,
@@ -681,12 +1121,18 @@
     "fat_g": 0.2,
     "fiber_g": 1.5,
     "yield_factor": 1.0,
-    "portions": []
+    "portions": [],
+    "name_it": "Passata / Polpa di Pomodoro"
   },
   {
     "food_id": "seed_zucchini",
     "name": "Zucchini / Courgettes",
-    "aliases": ["zucchine", "zucchina", "zucchini", "courgette"],
+    "aliases": [
+      "zucchine",
+      "zucchina",
+      "zucchini",
+      "courgette"
+    ],
     "category": "vegetables",
     "preparation_state": "raw",
     "kcal": 17,
@@ -695,12 +1141,21 @@
     "fat_g": 0.3,
     "fiber_g": 1.0,
     "yield_factor": 0.85,
-    "portions": [{"unit_name": "piece", "grams": 180.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 180.0
+      }
+    ],
+    "name_it": "Zucchine"
   },
   {
     "food_id": "seed_broccoli",
     "name": "Broccoli",
-    "aliases": ["broccoli", "broccoletti"],
+    "aliases": [
+      "broccoli",
+      "broccoletti"
+    ],
     "category": "vegetables",
     "preparation_state": "raw",
     "kcal": 34,
@@ -708,13 +1163,17 @@
     "carbs_g": 4.0,
     "fat_g": 0.4,
     "fiber_g": 2.6,
-    "yield_factor": 0.90,
-    "portions": []
+    "yield_factor": 0.9,
+    "portions": [],
+    "name_it": "Broccoli"
   },
   {
     "food_id": "seed_spinach",
     "name": "Spinach",
-    "aliases": ["spinaci", "spinach"],
+    "aliases": [
+      "spinaci",
+      "spinach"
+    ],
     "category": "vegetables",
     "preparation_state": "raw",
     "kcal": 23,
@@ -723,12 +1182,19 @@
     "fat_g": 0.4,
     "fiber_g": 2.2,
     "yield_factor": 0.75,
-    "portions": []
+    "portions": [],
+    "name_it": "Spinaci"
   },
   {
     "food_id": "seed_mixed_salad",
     "name": "Mixed Leafy Salad",
-    "aliases": ["insalata", "lattuga", "insalata mista", "salad", "lettuce"],
+    "aliases": [
+      "insalata",
+      "lattuga",
+      "insalata mista",
+      "salad",
+      "lettuce"
+    ],
     "category": "vegetables",
     "preparation_state": "ready_to_eat",
     "kcal": 16,
@@ -737,12 +1203,18 @@
     "fat_g": 0.2,
     "fiber_g": 1.5,
     "yield_factor": 1.0,
-    "portions": []
+    "portions": [],
+    "name_it": "Insalata Mista / Lattuga"
   },
   {
     "food_id": "seed_carrots",
     "name": "Carrots",
-    "aliases": ["carote", "carota", "carrots", "carrot"],
+    "aliases": [
+      "carote",
+      "carota",
+      "carrots",
+      "carrot"
+    ],
     "category": "vegetables",
     "preparation_state": "ready_to_eat",
     "kcal": 41,
@@ -751,12 +1223,23 @@
     "fat_g": 0.2,
     "fiber_g": 2.8,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 75.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 75.0
+      }
+    ],
+    "name_it": "Carote"
   },
   {
     "food_id": "seed_bell_peppers",
     "name": "Bell Peppers",
-    "aliases": ["peperoni", "peperone", "bell pepper", "bell peppers"],
+    "aliases": [
+      "peperoni",
+      "peperone",
+      "bell pepper",
+      "bell peppers"
+    ],
     "category": "vegetables",
     "preparation_state": "raw",
     "kcal": 27,
@@ -765,12 +1248,23 @@
     "fat_g": 0.3,
     "fiber_g": 1.8,
     "yield_factor": 0.85,
-    "portions": [{"unit_name": "piece", "grams": 160.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 160.0
+      }
+    ],
+    "name_it": "Peperoni"
   },
   {
     "food_id": "seed_apple",
     "name": "Apple",
-    "aliases": ["mela", "mele", "apple", "apples"],
+    "aliases": [
+      "mela",
+      "mele",
+      "apple",
+      "apples"
+    ],
     "category": "fruit",
     "preparation_state": "ready_to_eat",
     "kcal": 52,
@@ -779,12 +1273,21 @@
     "fat_g": 0.2,
     "fiber_g": 2.4,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 180.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 180.0
+      }
+    ],
+    "name_it": "Mela"
   },
   {
     "food_id": "seed_banana",
     "name": "Banana",
-    "aliases": ["banana", "banane"],
+    "aliases": [
+      "banana",
+      "banane"
+    ],
     "category": "fruit",
     "preparation_state": "ready_to_eat",
     "kcal": 89,
@@ -793,12 +1296,24 @@
     "fat_g": 0.3,
     "fiber_g": 2.6,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 120.0, "description": "1 medium peeled banana"}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 120.0,
+        "description": "1 medium peeled banana"
+      }
+    ],
+    "name_it": "Banana"
   },
   {
     "food_id": "seed_orange",
     "name": "Orange",
-    "aliases": ["arancia", "arance", "orange", "oranges"],
+    "aliases": [
+      "arancia",
+      "arance",
+      "orange",
+      "oranges"
+    ],
     "category": "fruit",
     "preparation_state": "ready_to_eat",
     "kcal": 47,
@@ -807,12 +1322,24 @@
     "fat_g": 0.1,
     "fiber_g": 2.4,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 150.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 150.0
+      }
+    ],
+    "name_it": "Arancia"
   },
   {
     "food_id": "seed_berries",
     "name": "Mixed Berries / Blueberries",
-    "aliases": ["mirtilli", "frutti di bosco", "fragole", "berries", "blueberries"],
+    "aliases": [
+      "mirtilli",
+      "frutti di bosco",
+      "fragole",
+      "berries",
+      "blueberries"
+    ],
     "category": "fruit",
     "preparation_state": "ready_to_eat",
     "kcal": 52,
@@ -821,12 +1348,15 @@
     "fat_g": 0.3,
     "fiber_g": 2.7,
     "yield_factor": 1.0,
-    "portions": []
+    "portions": [],
+    "name_it": "Mirtilli / Frutti di Bosco"
   },
   {
     "food_id": "seed_avocado",
     "name": "Avocado",
-    "aliases": ["avocado"],
+    "aliases": [
+      "avocado"
+    ],
     "category": "fruit",
     "preparation_state": "ready_to_eat",
     "kcal": 160,
@@ -835,12 +1365,21 @@
     "fat_g": 14.7,
     "fiber_g": 6.7,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 140.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 140.0
+      }
+    ],
+    "name_it": "Avocado"
   },
   {
     "food_id": "seed_almonds",
     "name": "Almonds",
-    "aliases": ["mandorle", "almonds"],
+    "aliases": [
+      "mandorle",
+      "almonds"
+    ],
     "category": "nuts",
     "preparation_state": "ready_to_eat",
     "kcal": 579,
@@ -849,12 +1388,21 @@
     "fat_g": 49.9,
     "fiber_g": 12.5,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 1.2}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 1.2
+      }
+    ],
+    "name_it": "Mandorle"
   },
   {
     "food_id": "seed_walnuts",
     "name": "Walnuts",
-    "aliases": ["noci", "walnuts"],
+    "aliases": [
+      "noci",
+      "walnuts"
+    ],
     "category": "nuts",
     "preparation_state": "ready_to_eat",
     "kcal": 654,
@@ -863,12 +1411,22 @@
     "fat_g": 65.2,
     "fiber_g": 6.7,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 5.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 5.0
+      }
+    ],
+    "name_it": "Noci"
   },
   {
     "food_id": "seed_peanut_butter",
     "name": "100% Peanut Butter",
-    "aliases": ["burro di arachidi", "burro d'arachidi", "peanut butter"],
+    "aliases": [
+      "burro di arachidi",
+      "burro d'arachidi",
+      "peanut butter"
+    ],
     "category": "nuts",
     "preparation_state": "ready_to_eat",
     "kcal": 588,
@@ -878,14 +1436,25 @@
     "fiber_g": 6.0,
     "yield_factor": 1.0,
     "portions": [
-      {"unit_name": "tbsp", "grams": 16.0},
-      {"unit_name": "tsp", "grams": 6.0}
-    ]
+      {
+        "unit_name": "tbsp",
+        "grams": 16.0
+      },
+      {
+        "unit_name": "tsp",
+        "grams": 6.0
+      }
+    ],
+    "name_it": "Burro di Arachidi 100%"
   },
   {
     "food_id": "seed_tofu",
     "name": "Firm Tofu",
-    "aliases": ["tofu", "tofu al naturale", "firm tofu"],
+    "aliases": [
+      "tofu",
+      "tofu al naturale",
+      "firm tofu"
+    ],
     "category": "other",
     "preparation_state": "ready_to_eat",
     "kcal": 128,
@@ -894,12 +1463,18 @@
     "fat_g": 7.2,
     "fiber_g": 1.0,
     "yield_factor": 1.0,
-    "portions": []
+    "portions": [],
+    "name_it": "Tofu al Naturale"
   },
   {
     "food_id": "seed_whey_protein",
     "name": "Whey Protein Powder",
-    "aliases": ["proteine in polvere", "whey", "whey protein", "proteine whey"],
+    "aliases": [
+      "proteine in polvere",
+      "whey",
+      "whey protein",
+      "proteine whey"
+    ],
     "category": "snack",
     "preparation_state": "ready_to_eat",
     "kcal": 388,
@@ -908,12 +1483,23 @@
     "fat_g": 5.0,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "serving", "grams": 30.0, "description": "1 scoop"}]
+    "portions": [
+      {
+        "unit_name": "serving",
+        "grams": 30.0,
+        "description": "1 scoop"
+      }
+    ],
+    "name_it": "Proteine Whey in Polvere"
   },
   {
     "food_id": "seed_dark_chocolate_85",
     "name": "Dark Chocolate 85%",
-    "aliases": ["cioccolato fondente", "cioccolato fondente 85%", "dark chocolate"],
+    "aliases": [
+      "cioccolato fondente",
+      "cioccolato fondente 85%",
+      "dark chocolate"
+    ],
     "category": "snack",
     "preparation_state": "ready_to_eat",
     "kcal": 580,
@@ -922,12 +1508,21 @@
     "fat_g": 49.0,
     "fiber_g": 11.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "piece", "grams": 10.0}]
+    "portions": [
+      {
+        "unit_name": "piece",
+        "grams": 10.0
+      }
+    ],
+    "name_it": "Cioccolato Fondente 85%"
   },
   {
     "food_id": "seed_honey",
     "name": "Honey",
-    "aliases": ["miele", "honey"],
+    "aliases": [
+      "miele",
+      "honey"
+    ],
     "category": "snack",
     "preparation_state": "ready_to_eat",
     "kcal": 304,
@@ -937,14 +1532,27 @@
     "fiber_g": 0.2,
     "yield_factor": 1.0,
     "portions": [
-      {"unit_name": "tbsp", "grams": 20.0},
-      {"unit_name": "tsp", "grams": 7.0}
-    ]
+      {
+        "unit_name": "tbsp",
+        "grams": 20.0
+      },
+      {
+        "unit_name": "tsp",
+        "grams": 7.0
+      }
+    ],
+    "name_it": "Miele"
   },
   {
     "food_id": "seed_coffee_espresso",
     "name": "Espresso / Black Coffee (Unsweetened)",
-    "aliases": ["caffè", "caffe", "espresso", "coffee", "black coffee"],
+    "aliases": [
+      "caffè",
+      "caffe",
+      "espresso",
+      "coffee",
+      "black coffee"
+    ],
     "category": "beverage",
     "preparation_state": "ready_to_eat",
     "kcal": 2,
@@ -953,12 +1561,22 @@
     "fat_g": 0.0,
     "fiber_g": 0.0,
     "yield_factor": 1.0,
-    "portions": [{"unit_name": "cup", "grams": 35.0, "description": "1 espresso cup"}]
+    "portions": [
+      {
+        "unit_name": "cup",
+        "grams": 35.0,
+        "description": "1 espresso cup"
+      }
+    ],
+    "name_it": "Caffè Espresso (Amaro)"
   },
   {
     "food_id": "seed_sugar",
     "name": "White Sugar",
-    "aliases": ["zucchero", "sugar"],
+    "aliases": [
+      "zucchero",
+      "sugar"
+    ],
     "category": "snack",
     "preparation_state": "ready_to_eat",
     "kcal": 400,
@@ -968,8 +1586,15 @@
     "fiber_g": 0.0,
     "yield_factor": 1.0,
     "portions": [
-      {"unit_name": "tsp", "grams": 5.0},
-      {"unit_name": "pack", "grams": 5.0}
-    ]
+      {
+        "unit_name": "tsp",
+        "grams": 5.0
+      },
+      {
+        "unit_name": "pack",
+        "grams": 5.0
+      }
+    ],
+    "name_it": "Zucchero Bianco"
   }
 ]

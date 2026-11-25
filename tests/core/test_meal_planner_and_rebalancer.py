@@ -1,0 +1,494 @@
+"""Pure-Python tests for MealPlannerService, PlanRepository, Zero-Trust safety, and Rebalancer."""
+
+from __future__ import annotations
+
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+import aiohttp
+import pytest
+from pydantic import BaseModel
+
+from custom_components.ha_calories_buddy.core.llm.base import LLMClient
+from custom_components.ha_calories_buddy.core.llm.prompts.meal_plan import (
+    DayPlanProposalSchema,
+    MealSuggestionListSchema,
+    PlannedIngredientSpec,
+    PlannedMealSkeleton,
+    SingleMealSwapSchema,
+)
+from custom_components.ha_calories_buddy.core.models import (
+    ActivityLevel,
+    GoalType,
+    IngredientRole,
+    LLMConfig,
+    Macros,
+    MealLog,
+    MealStatus,
+    PersonProfile,
+    PlanGenerationOptions,
+    PlanItemStatus,
+    PreparationState,
+    Sex,
+    TargetMode,
+    TDEEEngineType,
+)
+from custom_components.ha_calories_buddy.core.nutrition.resolver import FoodResolver
+from custom_components.ha_calories_buddy.core.physiology.targets import TargetResult
+from custom_components.ha_calories_buddy.core.planner.meal_planner import (
+    HardConstraintViolationError,
+    MealPlannerService,
+)
+from custom_components.ha_calories_buddy.core.planner.preferences import (
+    PreferenceEngine,
+)
+from custom_components.ha_calories_buddy.core.planner.rebalancer import (
+    MealRebalancerService,
+)
+from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    default_slots_for_language,
+)
+from custom_components.ha_calories_buddy.core.storage.database import Database
+from custom_components.ha_calories_buddy.core.storage.food_repo import FoodRepository
+from custom_components.ha_calories_buddy.core.storage.meal_repo import MealRepository
+from custom_components.ha_calories_buddy.core.storage.plan_repo import (
+    MealPlanRepository,
+)
+from custom_components.ha_calories_buddy.core.storage.preference_repo import (
+    PreferenceRepository,
+)
+from custom_components.ha_calories_buddy.core.storage.profile_repo import (
+    ProfileRepository,
+)
+from custom_components.ha_calories_buddy.core.storage.seeder import (
+    seed_database_if_empty,
+)
+
+
+class ScriptedLLMClient(LLMClient):
+    """Queue-backed pure Python LLMClient mock avoiding HTTP."""
+
+    def __init__(self, responses: list[str]) -> None:
+        super().__init__(
+            LLMConfig(provider="ollama", model="test", max_retries=1),
+            aiohttp.ClientSession(),  # unused; closed cleanly in close()
+        )
+        self._responses = list(responses)
+        self.prompts_seen: list[str] = []
+
+    async def _raw_structured_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+    ) -> str:
+        self.prompts_seen.append(user_prompt)
+        if not self._responses:
+            raise AssertionError("ScriptedLLMClient ran out of scripted responses")
+        return self._responses.pop(0)
+
+    async def health_check(self) -> bool:
+        """Return True for mocked LLM client."""
+        return True
+
+
+@pytest.fixture
+async def ctx(tmp_path: Path) -> dict[str, Any]:
+    """Initialize DB, repos, and services for planner & rebalancer tests."""
+    db = Database(tmp_path / "planner.db")
+    await db.initialize()
+    await seed_database_if_empty(db)
+
+    profile_repo = ProfileRepository(db)
+    food_repo = FoodRepository(db)
+    meal_repo = MealRepository(db)
+    pref_repo = PreferenceRepository(db)
+    plan_repo = MealPlanRepository(db)
+    resolver = FoodResolver(food_repo)
+    pref_engine = PreferenceEngine(pref_repo, meal_repo)
+
+    profile = PersonProfile(
+        person_id="p_nico",
+        config_entry_id="ce_nico",
+        display_name="Nicola",
+        language="it",
+        sex=Sex.MALE,
+        birth_year=1990,
+        height_cm=178.0,
+        initial_weight_kg=74.0,
+        target_mode=TargetMode.PHYSIOLOGY,
+        goal_type=GoalType.MAINTAIN,
+        tdee_engine=TDEEEngineType.STATIC,
+        activity_level=ActivityLevel.MODERATE,
+        dietary_regime="omnivore",
+        allergies=["arachidi"],
+        meal_slots=default_slots_for_language("it"),
+    )
+    await profile_repo.upsert_person(profile)
+
+    yield {
+        "db": db,
+        "profile_repo": profile_repo,
+        "food_repo": food_repo,
+        "meal_repo": meal_repo,
+        "pref_repo": pref_repo,
+        "plan_repo": plan_repo,
+        "resolver": resolver,
+        "pref_engine": pref_engine,
+        "profile": profile,
+    }
+    await db.close()
+
+
+def _safe_day_skeletons() -> DayPlanProposalSchema:
+    return DayPlanProposalSchema(
+        meals=[
+            PlannedMealSkeleton(
+                meal_slot="Colazione",
+                title="Porridge proteico e mandorle",
+                prep_minutes=10,
+                steps=["Cuoci i fiocchi d'avena", "Unisci yogurt greco e mandorle"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Fiocchi d'avena", grams=60, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                    PlannedIngredientSpec(name="Yogurt greco 0%", grams=170, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Mandorle", grams=15, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Pranzo",
+                title="Pollo con riso basmati e zucchine",
+                prep_minutes=20,
+                steps=["Cuoci il riso basmati", "Griglia il pollo con olio"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Riso basmati", grams=80, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                    PlannedIngredientSpec(name="Petto di pollo", grams=150, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Olio extravergine di oliva", grams=12, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                    PlannedIngredientSpec(name="Zucchine", grams=150, preparation_state=PreparationState.RAW, role=IngredientRole.PRODUCE_FIXED),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Spuntino",
+                title="Pane integrale e yogurt greco",
+                prep_minutes=5,
+                steps=["Servi yogurt greco con pane"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Pane integrale", grams=40, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.CARB_ANCHOR),
+                    PlannedIngredientSpec(name="Yogurt greco 0%", grams=150, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Cena",
+                title="Salmone al forno con patate e spinaci",
+                prep_minutes=25,
+                steps=["Cuoci salmone e patate in forno"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Salmone fresco", grams=160, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Patate", grams=220, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                    PlannedIngredientSpec(name="Olio extravergine di oliva", grams=8, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            ),
+        ]
+    )
+
+
+async def test_suggest_generate_meal_prep_swap_and_promote(ctx: dict[str, Any]) -> None:
+    """Verify Chef suggestions, 3-day meal_prep_mode reuse, single swap, and 1-tap promote."""
+    profile: PersonProfile = ctx["profile"]
+
+    suggest_payload = MealSuggestionListSchema(
+        suggestions=[
+            PlannedMealSkeleton(
+                meal_slot="Cena",
+                title="Salmone e riso basmati",
+                prep_minutes=20,
+                steps=["Cuoci il riso", "Rosola il salmone"],
+                ingredients=[
+                    PlannedIngredientSpec(name="Salmone fresco", grams=150, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Riso basmati", grams=80, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                    PlannedIngredientSpec(name="Olio extravergine di oliva", grams=10, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            ),
+            PlannedMealSkeleton(
+                meal_slot="Cena",
+                title="Pollo e lenticchie cotte",
+                prep_minutes=25,
+                ingredients=[
+                    PlannedIngredientSpec(name="Petto di pollo", grams=140, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Lenticchie cotte", grams=180, preparation_state=PreparationState.COOKED, role=IngredientRole.CARB_ANCHOR),
+                ],
+            ),
+        ]
+    ).model_dump_json()
+
+    day1_payload = _safe_day_skeletons().model_dump_json()
+    day3_payload = _safe_day_skeletons().model_dump_json()
+    swap_payload = SingleMealSwapSchema(
+        meal=PlannedMealSkeleton(
+            meal_slot="Cena",
+            title="Merluzzo con patate e olio",
+            prep_minutes=20,
+            ingredients=[
+                PlannedIngredientSpec(name="Merluzzo", grams=200, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR),
+                PlannedIngredientSpec(name="Patate", grams=250, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+                PlannedIngredientSpec(name="Olio extravergine di oliva", grams=14, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+            ],
+        )
+    ).model_dump_json()
+
+    # Notice num_days=3 with meal_prep_mode=True consumes ONLY 2 day LLM calls (day 1 & day 3; day 2 reuses day 1)
+    client = ScriptedLLMClient([suggest_payload, day1_payload, day3_payload, swap_payload])
+    try:
+        planner = MealPlannerService(
+            plan_repo=ctx["plan_repo"],
+            meal_repo=ctx["meal_repo"],
+            preference_engine=ctx["pref_engine"],
+            resolver=ctx["resolver"],
+            llm_client_getter=lambda _p: client,
+        )
+
+        # 1. On-demand meal suggestion
+        suggestions = await planner.suggest_meal(
+            profile,
+            meal_slot="Cena",
+            target_macros=Macros(kcal=700, protein_g=45, carbs_g=70, fat_g=24, fiber_g=10),
+            user_hint="veloce",
+            count=2,
+        )
+        assert len(suggestions) == 2
+        assert all(s.meal_slot == "Cena" for s in suggestions)
+        assert suggestions[0].macros.kcal > 0
+
+        # 2. 3-day plan with meal_prep_mode=True
+        today = date.today()
+        daily_targets = TargetResult(
+            target_kcal=2300.0,
+            protein_g=155.0,
+            carbs_g=250.0,
+            fat_g=70.0,
+            fiber_g=32.0,
+            mode=TargetMode.PHYSIOLOGY,
+        )
+        plan = await planner.generate_meal_plan(
+            profile,
+            start_date=today,
+            daily_targets=daily_targets,
+            options=PlanGenerationOptions(num_days=3, meal_prep_mode=True),
+        )
+        assert len(plan.days) == 3
+        assert len(client._responses) == 1  # only swap_payload remains!
+        assert plan.days[1].items[1].title == plan.days[0].items[1].title  # batch reused!
+
+        persisted = await ctx["plan_repo"].get_active_plan(profile.person_id, reference_date=today)
+        assert persisted is not None
+        assert persisted.plan_id == plan.plan_id
+
+        # 3. Swap Dinner on day 0
+        dinner_item = next(it for it in persisted.days[0].items if it.meal_slot == "Cena")
+        swapped = await planner.swap_plan_meal(
+            profile, dinner_item.plan_item_id, user_instruction="pesce bianco"
+        )
+        assert "Merluzzo" in swapped.title
+
+        # 4. 1-tap promote Lunch with actual_scale=1.2
+        lunch_item = next(it for it in persisted.days[0].items if it.meal_slot == "Pranzo")
+        logged = await planner.promote_plan_meal(profile, lunch_item.plan_item_id, actual_scale=1.2)
+        assert logged.status == MealStatus.CONFIRMED
+        assert logged.source_channel == "plan_promote"
+        assert logged.plan_item_id == lunch_item.plan_item_id
+        assert logged.total_macros.kcal == pytest.approx(lunch_item.macros.kcal * 1.2, abs=5.0)
+
+        after_promote = await ctx["plan_repo"].get_plan_item(profile.person_id, lunch_item.plan_item_id)
+        assert after_promote is not None
+        assert after_promote[1].status == PlanItemStatus.CONSUMED
+    finally:
+        await client._session.close()
+
+
+async def test_adversarial_allergen_rejection_retry_and_block(ctx: dict[str, Any]) -> None:
+    """Reject LLM proposals containing peanuts/allergens, retry cleanly, or block SQLite write."""
+    profile: PersonProfile = ctx["profile"]
+
+    poisoned = MealSuggestionListSchema(
+        suggestions=[
+            PlannedMealSkeleton(
+                meal_slot="Spuntino",
+                title="Yogurt e burro di arachidi",
+                ingredients=[
+                    PlannedIngredientSpec(name="Yogurt greco 0%", grams=150, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Burro di arachidi", grams=20, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            )
+        ]
+    ).model_dump_json()
+
+    repaired = MealSuggestionListSchema(
+        suggestions=[
+            PlannedMealSkeleton(
+                meal_slot="Spuntino",
+                title="Yogurt greco con mandorle",
+                ingredients=[
+                    PlannedIngredientSpec(name="Yogurt greco 0%", grams=150, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                    PlannedIngredientSpec(name="Mandorle", grams=20, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            )
+        ]
+    ).model_dump_json()
+
+    # Attempt 1 poisoned, Attempt 2 clean -> succeeds
+    client_recover = ScriptedLLMClient([poisoned, repaired])
+    try:
+        planner = MealPlannerService(
+            plan_repo=ctx["plan_repo"],
+            meal_repo=ctx["meal_repo"],
+            preference_engine=ctx["pref_engine"],
+            resolver=ctx["resolver"],
+            llm_client_getter=lambda _p: client_recover,
+        )
+        res = await planner.suggest_meal(
+            profile,
+            meal_slot="Spuntino",
+            target_macros=Macros(kcal=250, protein_g=20, carbs_g=10, fat_g=12),
+        )
+        assert "mandorle" in res[0].title.lower()
+        assert "REJECTED DUE TO FORBIDDEN INGREDIENTS" in client_recover.prompts_seen[1]
+    finally:
+        await client_recover._session.close()
+
+    # If ALL retries still violate allergen constraints -> HardConstraintViolationError, 0 DB plans written
+    bad_day = DayPlanProposalSchema(
+        meals=[
+            PlannedMealSkeleton(
+                meal_slot="Colazione",
+                title="Toast alle arachidi",
+                ingredients=[
+                    PlannedIngredientSpec(name="Peanuts", grams=30, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.FAT_ANCHOR),
+                ],
+            )
+        ]
+    ).model_dump_json()
+    client_fail = ScriptedLLMClient([bad_day, bad_day, bad_day])
+    try:
+        planner_fail = MealPlannerService(
+            plan_repo=ctx["plan_repo"],
+            meal_repo=ctx["meal_repo"],
+            preference_engine=ctx["pref_engine"],
+            resolver=ctx["resolver"],
+            llm_client_getter=lambda _p: client_fail,
+        )
+        with pytest.raises(HardConstraintViolationError) as exc_info:
+            await planner_fail.generate_meal_plan(
+                profile,
+                start_date=date.today(),
+                daily_targets=TargetResult(
+                    target_kcal=2200, protein_g=140, carbs_g=250, fat_g=70, fiber_g=30, mode=TargetMode.PHYSIOLOGY
+                ),
+                options=PlanGenerationOptions(num_days=1),
+            )
+        assert exc_info.value.violations
+        assert await ctx["plan_repo"].get_active_plan(profile.person_id) is None
+    finally:
+        await client_fail._session.close()
+
+
+async def test_rebalancer_intraday_and_multiday_floors(ctx: dict[str, Any]) -> None:
+    """Verify deterministic intraday rescale, LLM swap fallback, and strict multiday floors."""
+    profile: PersonProfile = ctx["profile"]
+    today = date.today()
+
+    # Seed a 3-day active plan via MealPlannerService
+    day_payload = _safe_day_skeletons().model_dump_json()
+    swap_payload = SingleMealSwapSchema(
+        meal=PlannedMealSkeleton(
+            meal_slot="Cena",
+            title="Merluzzo leggero",
+            ingredients=[
+                PlannedIngredientSpec(name="Merluzzo", grams=150, preparation_state=PreparationState.RAW, role=IngredientRole.PROTEIN_ANCHOR),
+                PlannedIngredientSpec(name="Zucchine", grams=200, preparation_state=PreparationState.RAW, role=IngredientRole.PRODUCE_FIXED),
+            ],
+        )
+    ).model_dump_json()
+
+    client = ScriptedLLMClient([day_payload, day_payload, day_payload, swap_payload, swap_payload])
+    try:
+        planner = MealPlannerService(
+            plan_repo=ctx["plan_repo"],
+            meal_repo=ctx["meal_repo"],
+            preference_engine=ctx["pref_engine"],
+            resolver=ctx["resolver"],
+            llm_client_getter=lambda _p: client,
+        )
+        rebalancer = MealRebalancerService(
+            plan_repo=ctx["plan_repo"],
+            meal_repo=ctx["meal_repo"],
+            resolver=ctx["resolver"],
+            planner_service=planner,
+        )
+
+        # No plan yet -> returns mode='no_items'
+        daily_targets = TargetResult(
+            target_kcal=2200.0, protein_g=150.0, carbs_g=240.0, fat_g=70.0, fiber_g=31.0, mode=TargetMode.PHYSIOLOGY
+        )
+        empty_res = await rebalancer.rebalance_intraday(
+            profile, target_date=today, daily_targets=daily_targets
+        )
+        assert empty_res.mode == "no_items"
+
+        # Generate 3-day plan
+        plan = await planner.generate_meal_plan(
+            profile,
+            start_date=today,
+            daily_targets=daily_targets,
+            options=PlanGenerationOptions(num_days=3, meal_prep_mode=False),
+        )
+
+        # Consume Colazione & Pranzo, then log a moderate extra snack -> deterministic rescale handles it
+        day0 = plan.days[0]
+        for slot in ("Colazione", "Pranzo"):
+            it = next(x for x in day0.items if x.meal_slot == slot)
+            await planner.promote_plan_meal(profile, it.plan_item_id)
+
+        # Modest extra snack so remaining dinner budget stays feasible (~500 kcal)
+        await ctx["meal_repo"].create_meal_log(
+            MealLog(
+                log_id="extra_mod",
+                person_id=profile.person_id,
+                log_date=today,
+                meal_slot="Spuntino",
+                status=MealStatus.CONFIRMED,
+                total_macros=Macros(kcal=350, protein_g=10, carbs_g=45, fat_g=14, fiber_g=3),
+                items=[],
+            )
+        )
+        # Skip original planned Spuntino so only Cena remains
+        spuntino_it = next(x for x in day0.items if x.meal_slot == "Spuntino")
+        await ctx["plan_repo"].update_plan_item_status(
+            profile.person_id, spuntino_it.plan_item_id, PlanItemStatus.SKIPPED
+        )
+
+        intra_res = await rebalancer.rebalance_intraday(
+            profile, target_date=today, daily_targets=daily_targets, allow_llm_swap=True
+        )
+        assert intra_res.mode in {"intraday_rescale", "intraday_swap"}
+        assert len(intra_res.updated_items) == 1
+
+        # Huge caloric excess triggers strict multiday physiological floor (max(1500, 0.85 * 1700)=1500, fat >= 0.65 * 74 = 48.1)
+        multi_res = await rebalancer.rebalance_multiday(
+            profile,
+            start_date=today,
+            excess_kcal=4500.0,
+            bmr_kcal=1700.0,
+            weight_kg=74.0,
+            spread_days=3,
+        )
+        assert multi_res.mode == "multiday_smooth"
+        assert len(multi_res.updated_days) == 2  # today+1 and today+2 in a 3-day plan
+        assert "daily_calorie_floor_enforced" in multi_res.safety_warnings
+
+        for future_day in multi_res.updated_days:
+            pday = await ctx["plan_repo"].get_plan_day(profile.person_id, future_day)
+            assert pday is not None
+            assert pday.target_macros.kcal >= 1500.0
+            assert pday.target_macros.fat_g >= (0.65 * 74.0) - 0.2
+    finally:
+        await client._session.close()

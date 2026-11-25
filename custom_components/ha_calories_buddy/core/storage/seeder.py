@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -27,38 +28,59 @@ def normalize_text(value: str) -> str:
 
 async def seed_database_if_empty(db: Database) -> int:
     """Load baseline seed foods idempotently without overwriting user modifications."""
-    raw_items = json.loads(SEED_FILE.read_text(encoding="utf-8"))
+    raw_text = await asyncio.to_thread(SEED_FILE.read_text, encoding="utf-8")
+    raw_items = json.loads(raw_text)
     now = datetime.now(UTC).isoformat()
     inserted = 0
+    backfilled = 0
 
     async with db.transaction() as conn:
         for item in raw_items:
             food_id = item["food_id"]
+            name_it = item.get("name_it")
+            aliases_norm = [normalize_text(a) for a in item.get("aliases", [])]
+            if name_it:
+                aliases_norm.append(normalize_text(name_it))
+            aliases_text = "|".join(dict.fromkeys(a for a in aliases_norm if a))
+
             async with conn.execute(
-                "SELECT 1 FROM global_foods WHERE food_id = ?",
+                "SELECT source, name_it, aliases_text FROM global_foods WHERE food_id = ?",
                 (food_id,),
             ) as cursor:
-                exists = await cursor.fetchone()
-            if exists is not None:
-                continue
+                existing = await cursor.fetchone()
 
-            aliases_norm = [normalize_text(a) for a in item.get("aliases", [])]
-            aliases_text = "|".join(dict.fromkeys(a for a in aliases_norm if a))
+            if existing is not None:
+                # Idempotently backfill Italian display names & paired aliases on untouched seed rows
+                if existing["source"] == "seed" and (
+                    existing["name_it"] != name_it
+                    or existing["aliases_text"] != aliases_text
+                ):
+                    await conn.execute(
+                        """
+                        UPDATE global_foods
+                        SET name_it = ?, aliases_text = ?
+                        WHERE food_id = ? AND source = 'seed'
+                        """,
+                        (name_it, aliases_text, food_id),
+                    )
+                    backfilled += 1
+                continue
 
             await conn.execute(
                 """
                 INSERT INTO global_foods (
-                    food_id, name, normalized_name, aliases_text,
+                    food_id, name, name_it, normalized_name, aliases_text,
                     brand, normalized_brand, barcode_ean, category,
                     preparation_state, kcal_per_100g, protein_per_100g,
                     carbs_per_100g, fat_per_100g, fiber_per_100g,
                     label_standard, yield_factor, source, verified,
                     atwater_warning, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     food_id,
                     item["name"],
+                    name_it,
                     normalize_text(item["name"]),
                     aliases_text,
                     None,
@@ -97,6 +119,12 @@ async def seed_database_if_empty(db: Database) -> int:
                 )
             inserted += 1
 
-    if inserted > 0:
-        log_event(_LOGGER, logging.INFO, "seed_foods_loaded", count=inserted)
+    if inserted > 0 or backfilled > 0:
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "seed_foods_synced",
+            inserted=inserted,
+            backfilled=backfilled,
+        )
     return inserted

@@ -15,6 +15,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from custom_components.ha_calories_buddy.const import (
     CONF_ACTIVE_KCAL_ENTITY,
     CONF_ACTIVITY_LEVEL,
+    CONF_AI_TASK_ENTITY,
     CONF_ALLERGIES,
     CONF_BIRTH_YEAR,
     CONF_BLACKLIST,
@@ -38,10 +39,12 @@ from custom_components.ha_calories_buddy.const import (
     CONF_LLM_PROVIDER,
     CONF_MANUAL_CARBS_G,
     CONF_MANUAL_FAT_G,
+    CONF_MANUAL_FIBER_G,
     CONF_MANUAL_KCAL,
     CONF_MANUAL_PROTEIN_G,
     CONF_MANUAL_TRAINING_CARBS_G,
     CONF_MANUAL_TRAINING_FAT_G,
+    CONF_MANUAL_TRAINING_FIBER_G,
     CONF_MANUAL_TRAINING_KCAL,
     CONF_MANUAL_TRAINING_PROTEIN_G,
     CONF_MEAL_SLOTS,
@@ -67,6 +70,7 @@ from custom_components.ha_calories_buddy.const import (
     ENTRY_KIND_PERSON,
     LLM_PROVIDER_ANTHROPIC,
     LLM_PROVIDER_GEMINI,
+    LLM_PROVIDER_HA_AI_TASK,
     LLM_PROVIDER_NONE,
     LLM_PROVIDER_OLLAMA,
     LLM_PROVIDER_OPENAI,
@@ -83,6 +87,7 @@ from custom_components.ha_calories_buddy.core.models import (
     TargetMode,
     TDEEEngineType,
 )
+from custom_components.ha_calories_buddy.ha_llm_client import HAAITaskLLMClient
 
 DEFAULT_MODELS_BY_PROVIDER: dict[str, str] = {
     LLM_PROVIDER_OPENAI: "gpt-4o-mini",
@@ -118,6 +123,18 @@ async def _validate_llm_input(
     if provider in ("", LLM_PROVIDER_NONE):
         return {}
 
+    if provider == LLM_PROVIDER_HA_AI_TASK:
+        ai_task_entity = str(user_input.get(CONF_AI_TASK_ENTITY) or "").strip() or None
+        cfg = LLMConfig(
+            provider=provider,
+            ai_task_entity=ai_task_entity,
+            timeout_s=10.0,
+        )
+        client = HAAITaskLLMClient(hass, cfg, async_get_clientsession(hass))
+        if not await client.health_check():
+            return {"base": "cannot_connect"}
+        return {}
+
     api_key = str(user_input.get(CONF_LLM_API_KEY) or "").strip() or None
     base_url = str(user_input.get(CONF_LLM_BASE_URL) or "").strip() or DEFAULT_BASE_URLS_BY_PROVIDER.get(provider)
     model = str(user_input.get(CONF_LLM_MODEL) or "").strip() or DEFAULT_MODELS_BY_PROVIDER.get(provider, "")
@@ -138,15 +155,26 @@ async def _validate_llm_input(
         model=model,
         timeout_s=10.0,
     )
-    client = create_llm_client(cfg, async_get_clientsession(hass))
-    if client is None:
+    direct_client = create_llm_client(cfg, async_get_clientsession(hass))
+    if direct_client is None:
         return {}
-    if not await client.health_check():
+    if not await direct_client.health_check():
         return {"base": "cannot_connect"}
     return {}
 
 
-def _hub_schema(defaults: dict[str, Any]) -> vol.Schema:
+def _suggested_ai_task_entity(defaults: dict[str, Any], hass: HomeAssistant | None) -> str | None:
+    if defaults.get(CONF_AI_TASK_ENTITY):
+        return str(defaults[CONF_AI_TASK_ENTITY])
+    if hass is not None:
+        discovered = hass.states.async_entity_ids("ai_task")
+        if len(discovered) == 1:
+            return discovered[0]
+    return None
+
+
+def _hub_schema(defaults: dict[str, Any], hass: HomeAssistant | None = None) -> vol.Schema:
+    suggested_ai_task = _suggested_ai_task_entity(defaults, hass)
     return vol.Schema(
         {
             vol.Required(
@@ -167,6 +195,12 @@ def _hub_schema(defaults: dict[str, Any]) -> vol.Schema:
                     translation_key="llm_provider",
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
+            ),
+            vol.Optional(
+                CONF_AI_TASK_ENTITY,
+                description={"suggested_value": suggested_ai_task},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="ai_task")
             ),
             vol.Optional(
                 CONF_LLM_API_KEY, default=defaults.get(CONF_LLM_API_KEY, "")
@@ -352,6 +386,14 @@ def _manual_targets_schema(defaults: dict[str, Any]) -> vol.Schema:
                 )
             ),
             vol.Optional(
+                CONF_MANUAL_FIBER_G,
+                description={"suggested_value": defaults.get(CONF_MANUAL_FIBER_G)},
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.0, max=150.0, step=1.0, unit_of_measurement="g", mode=selector.NumberSelectorMode.BOX
+                )
+            ),
+            vol.Optional(
                 CONF_MANUAL_TRAINING_KCAL,
                 description={"suggested_value": defaults.get(CONF_MANUAL_TRAINING_KCAL)},
             ): selector.NumberSelector(
@@ -381,6 +423,14 @@ def _manual_targets_schema(defaults: dict[str, Any]) -> vol.Schema:
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.0, max=400.0, step=1.0, unit_of_measurement="g", mode=selector.NumberSelectorMode.BOX
+                )
+            ),
+            vol.Optional(
+                CONF_MANUAL_TRAINING_FIBER_G,
+                description={"suggested_value": defaults.get(CONF_MANUAL_TRAINING_FIBER_G)},
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.0, max=150.0, step=1.0, unit_of_measurement="g", mode=selector.NumberSelectorMode.BOX
                 )
             ),
         }
@@ -432,7 +482,8 @@ def _entities_schema(defaults: dict[str, Any]) -> vol.Schema:
     )
 
 
-def _llm_override_schema(defaults: dict[str, Any]) -> vol.Schema:
+def _llm_override_schema(defaults: dict[str, Any], hass: HomeAssistant | None = None) -> vol.Schema:
+    suggested_ai_task = _suggested_ai_task_entity(defaults, hass)
     return vol.Schema(
         {
             vol.Required(
@@ -448,6 +499,12 @@ def _llm_override_schema(defaults: dict[str, Any]) -> vol.Schema:
                     translation_key="llm_provider",
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
+            ),
+            vol.Optional(
+                CONF_AI_TASK_ENTITY,
+                description={"suggested_value": suggested_ai_task},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="ai_task")
             ),
             vol.Optional(
                 CONF_LLM_API_KEY, default=defaults.get(CONF_LLM_API_KEY, "")
@@ -545,7 +602,7 @@ class CaloriesBuddyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="hub",
-            data_schema=_hub_schema(user_input or {}),
+            data_schema=_hub_schema(user_input or {}, self.hass),
             errors=errors,
         )
 
@@ -661,7 +718,7 @@ class CaloriesBuddyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="person_llm",
-            data_schema=_llm_override_schema(user_input or self._person_data),
+            data_schema=_llm_override_schema(user_input or self._person_data, self.hass),
             errors=errors,
         )
 
@@ -722,7 +779,7 @@ class CaloriesBuddyOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="hub_options",
-            data_schema=_hub_schema(user_input or current),
+            data_schema=_hub_schema(user_input or current, self.hass),
             errors=errors,
         )
 
@@ -785,7 +842,7 @@ class CaloriesBuddyOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="llm",
-            data_schema=_llm_override_schema(user_input or current),
+            data_schema=_llm_override_schema(user_input or current, self.hass),
             errors=errors,
         )
 

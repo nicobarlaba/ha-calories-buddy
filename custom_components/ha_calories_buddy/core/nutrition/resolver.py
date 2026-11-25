@@ -107,18 +107,59 @@ class FoodResolver:
         limit: int = 15,
     ) -> list[EffectiveFood]:
         """Search local Vault and optionally merge external Open Food Facts hits."""
-        local = await self._food_repo.search(
-            query, person_id=person_id, brand=brand, limit=limit
+        foods, _ = await self.search_foods_paginated(
+            query=query,
+            person_id=person_id,
+            brand=brand,
+            language=language,
+            include_external=include_external,
+            limit=limit,
+            offset=0,
         )
-        if not include_external or self._off is None or len(local) >= limit:
-            return local
+        return foods
+
+    async def search_foods_paginated(
+        self,
+        query: str = "",
+        person_id: str | None = None,
+        brand: str | None = None,
+        category: str | None = None,
+        language: str = "en",
+        include_external: bool = True,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[EffectiveFood], int]:
+        """Search or browse local Vault with pagination and optional external OFF backfill."""
+        safe_limit = max(1, min(100, int(limit)))
+        safe_offset = max(0, int(offset))
+        local, total_count = await self._food_repo.list_foods_paginated(
+            person_id=person_id,
+            query=query,
+            category=category,
+            limit=safe_limit,
+            offset=safe_offset,
+            language=language,
+        )
+        if (
+            not include_external
+            or self._off is None
+            or not query.strip()
+            or safe_offset > 0
+            or len(local) >= safe_limit
+            or (category and category not in ("", "all"))
+        ):
+            return local, total_count
 
         external_items = await self._off.search(
-            query, brand=brand, language=language, limit=max(1, limit - len(local))
+            query,
+            brand=brand,
+            language=language,
+            limit=max(1, safe_limit - len(local)),
         )
         seen_ids = {f.food_id for f in local}
         seen_barcodes = {f.barcode_ean for f in local if f.barcode_ean}
         merged = list(local)
+        added_ext = 0
         for ext in external_items:
             if ext.food_id in seen_ids or (
                 ext.barcode_ean and ext.barcode_ean in seen_barcodes
@@ -131,7 +172,29 @@ class FoodResolver:
             if eff is not None:
                 merged.append(eff)
                 seen_ids.add(eff.food_id)
-        return merged[:limit]
+                added_ext += 1
+        return merged[:safe_limit], total_count + added_ext
+
+    async def resolve_food_candidate(
+        self,
+        *,
+        person_id: str,
+        name: str,
+        brand: str | None = None,
+        food_id: str | None = None,
+        state: PreparationState = PreparationState.UNSPECIFIED,
+        language: str = "en",
+    ) -> EffectiveFood | None:
+        """Resolve the best EffectiveFood candidate for planning/recipe ingredient scaling."""
+        return await self._resolve_food_entity(
+            person_id=person_id,
+            name=name,
+            brand=brand,
+            state=state,
+            barcode=None,
+            food_id=food_id,
+            language=language,
+        )
 
     async def resolve_item(
         self,
@@ -237,7 +300,7 @@ class FoodResolver:
                 if effective_food.source == FoodSource.LLM_ESTIMATED
                 else effective_food.food_id
             ),
-            display_name=effective_food.preferred_alias or effective_food.name,
+            display_name=effective_food.localized_name(language),
             brand=effective_food.brand or brand,
             input_quantity=quantity,
             input_unit=canonical_unit,
@@ -336,6 +399,7 @@ class FoodResolver:
         return EffectiveFood(
             food_id=food.food_id,
             name=food.name,
+            name_it=food.name_it,
             normalized_name=food.normalized_name,
             aliases=food.aliases,
             brand=food.brand,

@@ -51,6 +51,9 @@ from custom_components.ha_calories_buddy.core.nutrition.yield_factors import (
     convert_to_reference_grams,
     default_yield_for_category,
 )
+from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    resolve_meal_slot,
+)
 from custom_components.ha_calories_buddy.core.storage.food_repo import FoodRepository
 from custom_components.ha_calories_buddy.core.storage.meal_repo import MealRepository
 from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
@@ -136,10 +139,12 @@ class MealLoggingService:
         frequent_foods = await self._meal_repo.get_top_frequent_foods(
             profile.person_id, limit=25
         )
+        now_hhmm = datetime.now().strftime("%H:%M")
         sys_prompt, user_prompt = build_meal_parse_prompts(
             profile=profile,
             utterance=text,
             frequent_foods=frequent_foods,
+            current_local_time=now_hhmm,
         )
         parsed = await llm_client.generate_structured(
             system_prompt=sys_prompt,
@@ -162,7 +167,11 @@ class MealLoggingService:
             )
             resolved_items.append(resolved)
 
-        chosen_slot = meal_slot or parsed.meal_slot
+        chosen_slot = resolve_meal_slot(
+            meal_slot or parsed.meal_slot,
+            profile.meal_slots,
+            language=profile.language,
+        )
         return await self._persist_resolved_meal(
             profile=profile,
             resolved_items=resolved_items,
@@ -182,7 +191,7 @@ class MealLoggingService:
         quantity: float = 100.0,
         unit: str = "g",
         state: PreparationState = PreparationState.UNSPECIFIED,
-        meal_slot: str = "Snack",
+        meal_slot: str | None = None,
         log_date: date | None = None,
         source_channel: str = "manual",
     ) -> LogMealResult:
@@ -198,13 +207,34 @@ class MealLoggingService:
             language=profile.language,
             llm_estimator=None,
         )
+        chosen_slot = resolve_meal_slot(
+            meal_slot,
+            profile.meal_slots,
+            language=profile.language,
+        )
         return await self._persist_resolved_meal(
             profile=profile,
             resolved_items=[resolved],
-            meal_slot=meal_slot,
+            meal_slot=chosen_slot,
             log_date=log_date or date.today(),
             source_channel=source_channel,
             raw_input_text=None,
+        )
+
+    async def change_meal_slot(
+        self,
+        profile: PersonProfile,
+        log_id: str,
+        new_slot: str,
+    ) -> MealLog | None:
+        """Normalize and persist a new meal_slot on an existing logged meal."""
+        normalized_slot = resolve_meal_slot(
+            new_slot,
+            profile.meal_slots,
+            language=profile.language,
+        )
+        return await self._meal_repo.update_meal_slot(
+            profile.person_id, log_id, normalized_slot
         )
 
     async def confirm_pending_meal(
@@ -421,6 +451,7 @@ class MealLoggingService:
             p=round(total_macros.protein_g, 1),
             c=round(total_macros.carbs_g, 1),
             f=round(total_macros.fat_g, 1),
+            fib=round(total_macros.fiber_g or 0.0, 1),
         )
         warnings = self._build_warning_messages(profile.language, resolved_items)
         return LogMealResult(

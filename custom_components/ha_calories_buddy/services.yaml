@@ -62,8 +62,7 @@ log_meal_item:
             - ready_to_eat
             - unspecified
     meal_slot:
-      name: Meal Slot
-      default: Snack
+      name: Meal Slot (optional)
       selector:
         text:
     person:
@@ -129,6 +128,25 @@ update_meal_item:
       selector:
         text:
 
+update_meal_slot:
+  name: Update Logged Meal Slot
+  description: Move an already logged meal to a different meal slot (e.g., Breakfast, Lunch, Dinner).
+  fields:
+    log_id:
+      name: Meal Log ID
+      required: true
+      selector:
+        text:
+    meal_slot:
+      name: New Meal Slot
+      required: true
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
 delete_meal:
   name: Delete Meal
   description: Soft-delete a logged meal.
@@ -170,6 +188,182 @@ log_weight:
           max: 350
           step: 0.1
           unit_of_measurement: kg
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+suggest_meal:
+  name: Suggest Meal / Recipe
+  description: Generate 1-3 AI-proposed meals deterministically scaled to macro budget and hard constraints.
+  fields:
+    meal_slot:
+      name: Meal Slot (optional)
+      selector:
+        text:
+    hint:
+      name: Hint / Craving (optional)
+      selector:
+        text:
+    max_cook_minutes:
+      name: Max Cook Time (minutes, optional)
+      selector:
+        number:
+          min: 5
+          max: 180
+          step: 5
+    count:
+      name: Number of Suggestions
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 3
+          step: 1
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+generate_meal_plan:
+  name: Generate Meal Plan
+  description: Generate a 1-7 day personalized meal plan scaled within +-5% of daily targets.
+  fields:
+    start_date:
+      name: Start Date (YYYY-MM-DD, optional)
+      selector:
+        text:
+    num_days:
+      name: Number of Days
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 7
+          step: 1
+    meal_prep_mode:
+      name: Meal Prep Batch Reuse
+      default: false
+      selector:
+        boolean:
+    notes:
+      name: Planning Notes (optional)
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+swap_plan_meal:
+  name: Swap Planned Meal
+  description: Replace one planned meal slot with a new option matching the day's macro budget.
+  fields:
+    plan_item_id:
+      name: Planned Item ID
+      required: true
+      selector:
+        text:
+    instruction:
+      name: Replacement Instruction (optional)
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+promote_plan_meal:
+  name: Log Planned Meal as Eaten
+  description: Promote a planned meal directly into a confirmed MealLog.
+  fields:
+    plan_item_id:
+      name: Planned Item ID
+      required: true
+      selector:
+        text:
+    scale:
+      name: Portion Multiplier
+      default: 1.0
+      selector:
+        number:
+          min: 0.25
+          max: 3.0
+          step: 0.25
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+rebalance_today:
+  name: Rebalance Remaining Meal Plan
+  description: Adjust remaining meals today (or smooth excess/deficit across 2-4 days).
+  fields:
+    date:
+      name: Target Date (YYYY-MM-DD, optional)
+      selector:
+        text:
+    spread_days:
+      name: Multi-Day Smooth Days (2-4, optional)
+      selector:
+        number:
+          min: 2
+          max: 4
+          step: 1
+    allow_llm_swap:
+      name: Allow Smart Recipe Swap if Rescale Insufficient
+      default: true
+      selector:
+        boolean:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+set_preference:
+  name: Set Dietary Preference or Hard Constraint
+  description: Save a global household rule or per-person dietary preference/allergen.
+  fields:
+    scope:
+      name: Scope
+      required: true
+      selector:
+        select:
+          options:
+            - global
+            - person
+    target_type:
+      name: Target Type
+      required: true
+      selector:
+        select:
+          options:
+            - ingredient
+            - category
+            - brand
+            - dish
+    target_value:
+      name: Food / Brand / Category
+      required: true
+      selector:
+        text:
+    stance:
+      name: Stance
+      required: true
+      selector:
+        select:
+          options:
+            - allergy
+            - intolerance
+            - blacklist
+            - dislike
+            - like
+            - love
+            - preferred_brand
+    notes:
+      name: Notes (optional)
+      selector:
+        text:
     person:
       name: Person (optional)
       selector:

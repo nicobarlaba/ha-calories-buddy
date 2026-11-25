@@ -7,8 +7,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import aiohttp
+from homeassistant.core import HomeAssistant
 
-from custom_components.ha_calories_buddy.const import LLM_PROVIDER_NONE
+from custom_components.ha_calories_buddy.const import (
+    LLM_PROVIDER_HA_AI_TASK,
+    LLM_PROVIDER_NONE,
+)
 from custom_components.ha_calories_buddy.core.llm.base import LLMClient
 from custom_components.ha_calories_buddy.core.llm.factory import create_llm_client
 from custom_components.ha_calories_buddy.core.models import LLMConfig, PersonProfile
@@ -20,10 +24,26 @@ from custom_components.ha_calories_buddy.core.nutrition.resolver import FoodReso
 from custom_components.ha_calories_buddy.core.planner.meal_parser import (
     MealLoggingService,
 )
+from custom_components.ha_calories_buddy.core.planner.meal_planner import (
+    MealPlannerService,
+)
+from custom_components.ha_calories_buddy.core.planner.preferences import (
+    PreferenceEngine,
+)
+from custom_components.ha_calories_buddy.core.planner.rebalancer import (
+    MealRebalancerService,
+)
 from custom_components.ha_calories_buddy.core.storage.database import Database
 from custom_components.ha_calories_buddy.core.storage.food_repo import FoodRepository
 from custom_components.ha_calories_buddy.core.storage.meal_repo import MealRepository
+from custom_components.ha_calories_buddy.core.storage.plan_repo import (
+    MealPlanRepository,
+)
+from custom_components.ha_calories_buddy.core.storage.preference_repo import (
+    PreferenceRepository,
+)
 from custom_components.ha_calories_buddy.core.storage.profile_repo import ProfileRepository
+from custom_components.ha_calories_buddy.ha_llm_client import HAAITaskLLMClient
 
 if TYPE_CHECKING:
     from custom_components.ha_calories_buddy.coordinator import (
@@ -57,15 +77,21 @@ class PersonRuntimeData:
 class DomainRuntime:
     """Shared integration runtime state stored in hass.data[DOMAIN]."""
 
+    hass: HomeAssistant
     db: Database
     food_repo: FoodRepository
     meal_repo: MealRepository
     profile_repo: ProfileRepository
+    preference_repo: PreferenceRepository
+    plan_repo: MealPlanRepository
+    preference_engine: PreferenceEngine
     session: aiohttp.ClientSession
     off_provider: OpenFoodFactsProvider
     usda_provider: USDAProvider
     resolver: FoodResolver
     logging_service: MealLoggingService
+    planner_service: MealPlannerService
+    rebalancer_service: MealRebalancerService
     hub: HubRuntimeData | None = None
     persons: dict[str, PersonRuntimeData] = field(default_factory=dict)
     frontend_registered: bool = False
@@ -90,6 +116,8 @@ class DomainRuntime:
     def get_effective_llm_client(self, profile: PersonProfile) -> LLMClient | None:
         """Instantiate an async LLMClient for the given person, or None if disabled."""
         cfg = self.get_effective_llm_config(profile)
+        if (cfg.provider or "").strip().lower() == LLM_PROVIDER_HA_AI_TASK:
+            return HAAITaskLLMClient(self.hass, cfg, self.session)
         return create_llm_client(cfg, self.session)
 
     def is_llm_enabled(self, profile: PersonProfile) -> bool:
@@ -98,7 +126,7 @@ class DomainRuntime:
         return cfg.provider not in ("", LLM_PROVIDER_NONE, "disabled")
 
     def update_usda_api_key(self, api_key: str | None) -> None:
-        """Refresh the USDA provider when Hub options change."""
+        """Refresh the USDA provider and dependent services when Hub options change."""
         self.usda_provider = USDAProvider(self.session, api_key=api_key)
         self.resolver = FoodResolver(
             food_repo=self.food_repo,
@@ -110,4 +138,17 @@ class DomainRuntime:
             food_repo=self.food_repo,
             resolver=self.resolver,
             llm_client_getter=self.get_effective_llm_client,
+        )
+        self.planner_service = MealPlannerService(
+            plan_repo=self.plan_repo,
+            meal_repo=self.meal_repo,
+            preference_engine=self.preference_engine,
+            resolver=self.resolver,
+            llm_client_getter=self.get_effective_llm_client,
+        )
+        self.rebalancer_service = MealRebalancerService(
+            plan_repo=self.plan_repo,
+            meal_repo=self.meal_repo,
+            resolver=self.resolver,
+            planner_service=self.planner_service,
         )

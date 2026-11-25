@@ -7,6 +7,7 @@
         "data": {
           "language": "Lingua Predefinita",
           "llm_provider": "Provider LLM Predefinito",
+          "ai_task_entity": "Entità AI Task di Home Assistant (per provider HA AI Task)",
           "llm_api_key": "API Key (per provider cloud)",
           "llm_base_url": "Base URL (Ollama / LM Studio / endpoint custom)",
           "llm_model": "Nome Modello (es. gpt-4o-mini, gemini-2.5-flash, qwen2.5:14b)",
@@ -49,10 +50,12 @@
           "manual_protein_g": "Proteine (Riposo / Default)",
           "manual_carbs_g": "Carboidrati (Riposo / Default)",
           "manual_fat_g": "Grassi (Riposo / Default)",
+          "manual_fiber_g": "Fibre (Riposo / Default, opzionale)",
           "manual_training_kcal": "Calorie Giorno Allenamento (opzionale)",
           "manual_training_protein_g": "Proteine Giorno Allenamento (opzionale)",
           "manual_training_carbs_g": "Carboidrati Giorno Allenamento (opzionale)",
-          "manual_training_fat_g": "Grassi Giorno Allenamento (opzionale)"
+          "manual_training_fat_g": "Grassi Giorno Allenamento (opzionale)",
+          "manual_training_fiber_g": "Fibre Giorno Allenamento (opzionale)"
         }
       },
       "person_entities": {
@@ -74,6 +77,7 @@
         "data": {
           "llm_override_enabled": "Sovrascrivi LLM Hub per questa persona",
           "llm_provider": "Provider LLM",
+          "ai_task_entity": "Entità AI Task di Home Assistant (per provider HA AI Task)",
           "llm_api_key": "API Key",
           "llm_base_url": "Base URL",
           "llm_model": "Nome Modello"
@@ -118,6 +122,7 @@
         "data": {
           "language": "Lingua Predefinita",
           "llm_provider": "Provider LLM Predefinito",
+          "ai_task_entity": "Entità AI Task di Home Assistant (per provider HA AI Task)",
           "llm_api_key": "API Key",
           "llm_base_url": "Base URL",
           "llm_model": "Nome Modello",
@@ -148,10 +153,12 @@
           "manual_protein_g": "Proteine",
           "manual_carbs_g": "Carboidrati",
           "manual_fat_g": "Grassi",
+          "manual_fiber_g": "Fibre (opzionale)",
           "manual_training_kcal": "Calorie Giorno Allenamento",
           "manual_training_protein_g": "Proteine Giorno Allenamento",
           "manual_training_carbs_g": "Carboidrati Giorno Allenamento",
-          "manual_training_fat_g": "Grassi Giorno Allenamento"
+          "manual_training_fat_g": "Grassi Giorno Allenamento",
+          "manual_training_fiber_g": "Fibre Giorno Allenamento (opzionale)"
         }
       },
       "entities": {
@@ -171,6 +178,7 @@
         "data": {
           "llm_override_enabled": "Sovrascrivi LLM Hub",
           "llm_provider": "Provider LLM",
+          "ai_task_entity": "Entità AI Task di Home Assistant",
           "llm_api_key": "API Key",
           "llm_base_url": "Base URL",
           "llm_model": "Nome Modello"
@@ -210,6 +218,7 @@
     "llm_provider": {
       "options": {
         "none": "Nessuno (Solo Inserimento Manuale e Barcode)",
+        "ha_ai_task": "Home Assistant AI Task (Riusa LLM già configurato in HA)",
         "openai": "OpenAI",
         "anthropic": "Anthropic (Claude)",
         "gemini": "Google Gemini",
@@ -271,6 +280,7 @@
       "protein_consumed": { "name": "Proteine Assunte" },
       "carbs_consumed": { "name": "Carboidrati Assunti" },
       "fat_consumed": { "name": "Grassi Assunti" },
+      "fiber_consumed": { "name": "Fibre Assunte" },
       "tdee": { "name": "TDEE Stimato" },
       "pending_confirmations": { "name": "Pasti da Confermare" },
       "daily_adherence_pct": { "name": "Aderenza Target Calorico" }

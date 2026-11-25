@@ -1,9 +1,11 @@
-/** HA Calories Buddy Custom Lovelace Card (Zero-Build Modular ES Web Component) */
+/** HA Calories Buddy Custom Lovelace Card v0.2.0 (Zero-Build Modular ES Web Component) */
 import { CaloriesBuddyApi } from "./api.js";
 import { openBarcodeScannerModal } from "./components/barcode-scanner.js";
 import { t } from "./i18n/index.js";
 import { CARD_STYLES } from "./styles.js";
 import { escapeHtml } from "./utils.js";
+import { renderPlanView } from "./views/plan-view.js";
+import { renderPreferencesView } from "./views/preferences-view.js";
 import { renderTodayView } from "./views/today-view.js";
 import { renderVaultView } from "./views/vault-view.js";
 
@@ -18,8 +20,39 @@ class HaCaloriesBuddyCard extends HTMLElement {
     this._activePersonId = null;
     this._activeTab = "today";
     this._dashboard = null;
-    this._vaultState = { query: "", foods: [], showAddForm: false, overrideFood: null };
-    this._uiState = { language: "en", busy: false, error: null, toastLogId: null, editingItemId: null };
+    this._vaultState = {
+      query: "",
+      category: "all",
+      foods: [],
+      totalCount: 0,
+      offset: 0,
+      limit: 20,
+      showAddForm: false,
+      overrideFood: null,
+    };
+    this._planState = {
+      plan: null,
+      selectedDate: null,
+      showGenerateForm: false,
+      showSuggestForm: false,
+      suggestions: [],
+      swappingItemId: null,
+    };
+    this._prefState = {
+      loaded: false,
+      context: null,
+      entries: [],
+      feedback: [],
+    };
+    this._uiState = {
+      language: "en",
+      busy: false,
+      error: null,
+      toastLogId: null,
+      editingItemId: null,
+      selectedAiSlot: null,
+      macroPieMode: null,
+    };
     this._initialized = false;
   }
 
@@ -51,7 +84,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 6;
+    return 7;
   }
 
   static getConfigElement() {
@@ -99,15 +132,61 @@ class HaCaloriesBuddyCard extends HTMLElement {
     }
   }
 
-  async _loadVault(query = "") {
+  async _loadVault(query = "", category = this._vaultState.category, offset = 0) {
     if (!this._api || !this._activePersonId) return;
     try {
-      const resp = await this._api.searchFoods(this._activePersonId, query, query.length >= 2);
+      const resp = await this._api.searchFoods(
+        this._activePersonId,
+        query,
+        query.length >= 2,
+        {
+          category: category === "all" ? null : category,
+          limit: this._vaultState.limit,
+          offset,
+        }
+      );
       this._vaultState.query = query;
+      this._vaultState.category = category || "all";
+      this._vaultState.offset = Number(resp.offset || 0);
+      this._vaultState.totalCount = Number(resp.total_count ?? (resp.foods || []).length);
       this._vaultState.foods = resp.foods || [];
       this._render();
     } catch (err) {
       this._uiState.error = err?.message || "Search failed";
+      this._render();
+    }
+  }
+
+  async _loadPlan() {
+    if (!this._api || !this._activePersonId) return;
+    try {
+      const resp = await this._api.getPlan(this._activePersonId);
+      this._planState.plan = resp.plan || null;
+      if (this._planState.plan?.days?.length && !this._planState.selectedDate) {
+        const todayStr = this._dashboard?.date;
+        const hasToday = this._planState.plan.days.some((d) => d.plan_date === todayStr);
+        this._planState.selectedDate = hasToday
+          ? todayStr
+          : this._planState.plan.days[0].plan_date;
+      }
+      this._render();
+    } catch (err) {
+      this._uiState.error = err?.message || "Failed to load meal plan";
+      this._render();
+    }
+  }
+
+  async _loadPreferences() {
+    if (!this._api || !this._activePersonId) return;
+    try {
+      const resp = await this._api.getPreferences(this._activePersonId);
+      this._prefState.loaded = true;
+      this._prefState.context = resp.context || null;
+      this._prefState.entries = resp.entries || [];
+      this._prefState.feedback = resp.feedback || [];
+      this._render();
+    } catch (err) {
+      this._uiState.error = err?.message || "Failed to load preferences";
       this._render();
     }
   }
@@ -171,7 +250,9 @@ class HaCaloriesBuddyCard extends HTMLElement {
             : `
           <div class="tabs">
             <button type="button" class="tab-btn ${this._activeTab === "today" ? "active" : ""}" data-tab="today">${escapeHtml(t(lang, "tab_today"))}</button>
+            <button type="button" class="tab-btn ${this._activeTab === "plan" ? "active" : ""}" data-tab="plan">${escapeHtml(t(lang, "tab_plan"))}</button>
             <button type="button" class="tab-btn ${this._activeTab === "vault" ? "active" : ""}" data-tab="vault">${escapeHtml(t(lang, "tab_vault"))}</button>
+            <button type="button" class="tab-btn ${this._activeTab === "preferences" ? "active" : ""}" data-tab="preferences">${escapeHtml(t(lang, "tab_preferences"))}</button>
           </div>
           <div id="view-host"></div>
         `
@@ -183,9 +264,16 @@ class HaCaloriesBuddyCard extends HTMLElement {
     this.shadowRoot.querySelector("#person-select")?.addEventListener("change", async (ev) => {
       this._activePersonId = ev.target.value;
       this._uiState.editingItemId = null;
+      this._planState.plan = null;
+      this._planState.suggestions = [];
+      this._prefState.loaded = false;
       await this._loadDashboard();
       if (this._activeTab === "vault") {
-        await this._loadVault(this._vaultState.query);
+        await this._loadVault(this._vaultState.query, this._vaultState.category, 0);
+      } else if (this._activeTab === "plan") {
+        await this._loadPlan();
+      } else if (this._activeTab === "preferences") {
+        await this._loadPreferences();
       }
     });
 
@@ -204,7 +292,11 @@ class HaCaloriesBuddyCard extends HTMLElement {
       btn.addEventListener("click", async () => {
         this._activeTab = btn.getAttribute("data-tab");
         if (this._activeTab === "vault" && this._vaultState.foods.length === 0) {
-          await this._loadVault("");
+          await this._loadVault("", "all", 0);
+        } else if (this._activeTab === "plan" && !this._planState.plan) {
+          await this._loadPlan();
+        } else if (this._activeTab === "preferences" && !this._prefState.loaded) {
+          await this._loadPreferences();
         } else {
           this._render();
         }
@@ -226,7 +318,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
         {
           onVaultUpdated: async () => {
             if (this._activeTab === "vault") {
-              await this._loadVault(this._vaultState.query);
+              await this._loadVault(this._vaultState.query, this._vaultState.category, this._vaultState.offset);
             }
           },
           onLogFood: async (itemPayload) => {
@@ -242,9 +334,17 @@ class HaCaloriesBuddyCard extends HTMLElement {
     if (this._activeTab === "today") {
       renderTodayView(viewHost, this._dashboard, this._uiState, {
         api: this._api,
-        onLogText: (text) =>
+        onSelectAiSlot: (slot) => {
+          this._uiState.selectedAiSlot = slot;
+          this._render();
+        },
+        onSetMacroPieMode: (mode) => {
+          this._uiState.macroPieMode = mode;
+          this._render();
+        },
+        onLogText: (text, mealSlot = null) =>
           this._withBusy(async () => {
-            await this._api.logText(this._activePersonId, text);
+            await this._api.logText(this._activePersonId, text, null, mealSlot);
             await this._loadDashboard();
           }),
         onLogItem: (payload) =>
@@ -264,6 +364,11 @@ class HaCaloriesBuddyCard extends HTMLElement {
             this._uiState.toastLogId = logId;
             await this._loadDashboard();
           }),
+        onUpdateMealSlot: (logId, mealSlot) =>
+          this._withBusy(async () => {
+            await this._api.updateMealSlot(this._activePersonId, logId, mealSlot);
+            await this._loadDashboard();
+          }),
         onStartEditItem: (itemId) => {
           this._uiState.editingItemId = itemId;
           this._render();
@@ -274,15 +379,106 @@ class HaCaloriesBuddyCard extends HTMLElement {
             this._uiState.editingItemId = null;
             await this._loadDashboard();
           }),
+        onPromotePlanMeal: (planItemId, scale) =>
+          this._withBusy(async () => {
+            await this._api.promotePlanMeal(this._activePersonId, planItemId, scale);
+            await this._loadDashboard();
+            if (this._planState.plan) await this._loadPlan();
+          }),
+        onSwapPlanMeal: (planItemId, instruction) =>
+          this._withBusy(async () => {
+            await this._api.swapPlanMeal(this._activePersonId, planItemId, instruction);
+            await this._loadDashboard();
+            if (this._planState.plan) await this._loadPlan();
+          }),
+        onRebalanceToday: (opts) =>
+          this._withBusy(async () => {
+            await this._api.rebalanceToday(this._activePersonId, opts);
+            await this._loadDashboard();
+            if (this._planState.plan) await this._loadPlan();
+          }),
         onLogWeight: (weightKg) =>
           this._withBusy(async () => {
             await this._api.logWeight(this._activePersonId, weightKg);
             await this._loadDashboard();
           }),
       });
+    } else if (this._activeTab === "plan") {
+      renderPlanView(viewHost, this._planState, this._dashboard, this._uiState, {
+        onToggleGenerate: () => {
+          this._planState.showGenerateForm = !this._planState.showGenerateForm;
+          this._render();
+        },
+        onToggleSuggest: () => {
+          this._planState.showSuggestForm = !this._planState.showSuggestForm;
+          this._render();
+        },
+        onSelectDate: (d) => {
+          this._planState.selectedDate = d;
+          this._planState.swappingItemId = null;
+          this._render();
+        },
+        onGeneratePlan: (opts) =>
+          this._withBusy(async () => {
+            const resp = await this._api.generatePlan(this._activePersonId, opts);
+            this._planState.plan = resp.plan || null;
+            this._planState.selectedDate = this._planState.plan?.days?.[0]?.plan_date || null;
+            this._planState.showGenerateForm = false;
+            await this._loadDashboard();
+          }),
+        onSuggestMeal: (opts) =>
+          this._withBusy(async () => {
+            const resp = await this._api.suggestMeal(this._activePersonId, opts);
+            this._planState.suggestions = resp.suggestions || [];
+            this._planState.showSuggestForm = false;
+          }),
+        onLogSuggestion: (sug) =>
+          this._withBusy(async () => {
+            for (const ing of sug.ingredients || []) {
+              await this._api.logItem(this._activePersonId, {
+                food_id: ing.food_id || undefined,
+                name: ing.name,
+                quantity: ing.grams,
+                unit: "g",
+                state: ing.preparation_state || "unspecified",
+                meal_slot: sug.meal_slot,
+              });
+            }
+            this._planState.suggestions = [];
+            await this._loadDashboard();
+          }),
+        onPromotePlanMeal: (planItemId, scale) =>
+          this._withBusy(async () => {
+            await this._api.promotePlanMeal(this._activePersonId, planItemId, scale);
+            await this._loadPlan();
+            await this._loadDashboard();
+          }),
+        onStartSwap: (itemId) => {
+          this._planState.swappingItemId = itemId;
+          this._render();
+        },
+        onSwapPlanMeal: (planItemId, instruction) =>
+          this._withBusy(async () => {
+            await this._api.swapPlanMeal(this._activePersonId, planItemId, instruction);
+            this._planState.swappingItemId = null;
+            await this._loadPlan();
+            await this._loadDashboard();
+          }),
+        onSetFeedback: (title, rating) =>
+          this._withBusy(async () => {
+            await this._api.setMealFeedback(this._activePersonId, title, rating);
+            this._prefState.loaded = false;
+          }),
+        onRebalance: (opts) =>
+          this._withBusy(async () => {
+            await this._api.rebalanceToday(this._activePersonId, opts);
+            await this._loadPlan();
+            await this._loadDashboard();
+          }),
+      });
     } else if (this._activeTab === "vault") {
       renderVaultView(viewHost, this._vaultState, this._uiState, {
-        onSearchVault: (q) => this._loadVault(q),
+        onSearchVault: (q, cat = "all", off = 0) => this._loadVault(q, cat, off),
         onOpenBarcode: openBarcode,
         onToggleAddForm: () => {
           this._vaultState.showAddForm = !this._vaultState.showAddForm;
@@ -297,7 +493,24 @@ class HaCaloriesBuddyCard extends HTMLElement {
             await this._api.saveFood(this._activePersonId, payload);
             this._vaultState.showAddForm = false;
             this._vaultState.overrideFood = null;
-            await this._loadVault(this._vaultState.query);
+            await this._loadVault(
+              this._vaultState.query,
+              this._vaultState.category,
+              this._vaultState.offset
+            );
+          }),
+      });
+    } else if (this._activeTab === "preferences") {
+      renderPreferencesView(viewHost, this._prefState, this._uiState, {
+        onAddPreference: (payload) =>
+          this._withBusy(async () => {
+            await this._api.upsertPreference(this._activePersonId, payload);
+            await this._loadPreferences();
+          }),
+        onDeletePreference: (prefId) =>
+          this._withBusy(async () => {
+            await this._api.deletePreference(this._activePersonId, prefId);
+            await this._loadPreferences();
           }),
       });
     }
@@ -350,6 +563,6 @@ if (!window.customCards.some((c) => c.type === "ha-calories-buddy-card")) {
   window.customCards.push({
     type: "ha-calories-buddy-card",
     name: "HA Calories Buddy",
-    description: "Personal AI Dietitian, Food Diary, and Barcode Scanner",
+    description: "Personal AI Dietitian, Food Diary, Meal Planner, and Barcode Scanner",
   });
 }

@@ -34,11 +34,11 @@ export const CARD_STYLES = `
     gap: 8px;
     flex-wrap: wrap;
   }
-  select, input, button {
+  select, input, button, textarea {
     font-family: inherit;
     font-size: 0.9rem;
   }
-  select, input[type="text"], input[type="number"] {
+  select, input[type="text"], input[type="number"], input[type="date"], textarea {
     background: var(--secondary-background-color, rgba(127, 127, 127, 0.08));
     color: var(--primary-text-color);
     border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.25));
@@ -47,7 +47,7 @@ export const CARD_STYLES = `
     outline: none;
     box-sizing: border-box;
   }
-  select:focus, input:focus {
+  select:focus, input:focus, textarea:focus {
     border-color: var(--primary-color, #03a9f4);
   }
   button {
@@ -83,12 +83,24 @@ export const CARD_STYLES = `
     background: var(--error-color, #db4437);
     color: #fff;
   }
+  .chip-btn {
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
+    color: var(--primary-text-color);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 0.78rem;
+  }
+  .chip-btn.active {
+    background: var(--primary-color, #03a9f4);
+    color: var(--text-primary-color, #fff);
+  }
   .tabs {
     display: flex;
     gap: 6px;
     border-bottom: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
     padding-bottom: 8px;
     margin-bottom: 14px;
+    flex-wrap: wrap;
   }
   .tab-btn {
     background: transparent;
@@ -105,7 +117,7 @@ export const CARD_STYLES = `
     grid-template-columns: 120px 1fr;
     gap: 16px;
     align-items: center;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
   }
   @media (max-width: 480px) {
     .summary-grid {
@@ -137,7 +149,7 @@ export const CARD_STYLES = `
   .macro-bars {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 7px;
   }
   .macro-row {
     display: flex;
@@ -161,6 +173,39 @@ export const CARD_STYLES = `
     border-radius: 4px;
     transition: width 0.25s ease;
   }
+  .macro-pie-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.06));
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .macro-pie-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .macro-legend {
+    display: grid;
+    grid-template-columns: repeat(2, auto);
+    gap: 5px 14px;
+    font-size: 0.8rem;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
   .pills {
     display: flex;
     gap: 8px;
@@ -181,6 +226,10 @@ export const CARD_STYLES = `
   .pill.good {
     background: rgba(76, 175, 80, 0.16);
     color: var(--success-color, #2e7d32);
+  }
+  .pill.bad {
+    background: rgba(219, 68, 55, 0.15);
+    color: var(--error-color, #db4437);
   }
   .section-title {
     font-size: 0.92rem;
@@ -227,6 +276,11 @@ export const CARD_STYLES = `
     border-color: var(--warning-color, #ff9800);
     background: rgba(255, 152, 0, 0.06);
   }
+  .meal-card.planned {
+    border-style: dashed;
+    border-color: var(--primary-color, #03a9f4);
+    background: rgba(3, 169, 244, 0.04);
+  }
   .meal-header {
     display: flex;
     justify-content: space-between;
@@ -235,6 +289,11 @@ export const CARD_STYLES = `
     margin-bottom: 6px;
     font-weight: 600;
     font-size: 0.92rem;
+  }
+  .slot-inline-select {
+    padding: 3px 8px;
+    font-size: 0.84rem;
+    font-weight: 600;
   }
   .meal-item-row {
     display: flex;
@@ -255,6 +314,41 @@ export const CARD_STYLES = `
     gap: 6px;
     margin-top: 8px;
     flex-wrap: wrap;
+    align-items: center;
+  }
+  .day-strip {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    margin-bottom: 10px;
+  }
+  .day-pill {
+    flex: 0 0 auto;
+    min-width: 72px;
+    padding: 6px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.25));
+    background: transparent;
+    color: var(--primary-text-color);
+    text-align: center;
+    font-size: 0.78rem;
+  }
+  .day-pill.active {
+    background: var(--primary-color, #03a9f4);
+    color: var(--text-primary-color, #fff);
+    border-color: transparent;
+  }
+  .pagination-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--divider-color, rgba(127, 127, 127, 0.16));
+    flex-wrap: wrap;
+    font-size: 0.82rem;
   }
   .modal-backdrop {
     position: fixed;
@@ -271,7 +365,7 @@ export const CARD_STYLES = `
     color: var(--primary-text-color);
     border-radius: 12px;
     padding: 16px;
-    width: min(520px, 100%);
+    width: min(540px, 100%);
     max-height: 90vh;
     overflow-y: auto;
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);

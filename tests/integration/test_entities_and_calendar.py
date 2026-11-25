@@ -36,7 +36,7 @@ from tests.integration.conftest import setup_hub_and_persons
 async def test_sensors_unit_conversion_unavailable_fallback_and_calendars(
     hass: HomeAssistant,
 ) -> None:
-    """Verify 9 sensors + 1 calendar per person, lb->kg conversion, unavailable fallback, and colors."""
+    """Verify 10 sensors + 1 calendar per person, lb->kg conversion, fallback, fiber, and calendar."""
     hass.states.async_set(
         "sensor.marco_scale",
         "176.37",
@@ -99,10 +99,17 @@ async def test_sensors_unit_conversion_unavailable_fallback_and_calendars(
     giulia_sensors = [e for e in giulia_entities if e.domain == "sensor"]
     giulia_cals = [e for e in giulia_entities if e.domain == "calendar"]
 
-    assert len(marco_sensors) == 9
-    assert len(giulia_sensors) == 9
+    assert len(marco_sensors) == 10
+    assert len(giulia_sensors) == 10
     assert len(marco_cals) == 1
     assert len(giulia_cals) == 1
+
+    marco_fiber_ent = next(
+        e.entity_id for e in marco_sensors if e.unique_id == "person_marco_fiber_consumed"
+    )
+    fiber_init = hass.states.get(marco_fiber_ent)
+    assert fiber_init is not None
+    assert 20.0 <= float(fiber_init.attributes["target_g"]) <= 45.0
 
     # Distinct initial calendar colors assigned per person
     marco_cal_opts = marco_cals[0].options.get("calendar", {})
@@ -153,14 +160,112 @@ async def test_sensors_unit_conversion_unavailable_fallback_and_calendars(
     assert consumed_state is not None
     assert float(consumed_state.state) == pytest.approx(281.6, abs=0.2)
 
+    # Log lentils too so measurable fiber hits fiber_consumed sensor & calendar description
+    await hass.services.async_call(
+        DOMAIN,
+        "log_meal_item",
+        {
+            "person": "Marco",
+            "food_id": "seed_lentils_cooked",
+            "quantity": 100,
+            "unit": "g",
+            "state": "cooked",
+            "meal_slot": "Colazione",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    fiber_after = hass.states.get(marco_fiber_ent)
+    assert fiber_after is not None
+    assert float(fiber_after.state) >= 5.0
+
+    # Add a retrospective Colazione log logged at 22:00 local -> must anchor to 08:00 slot time
+    from datetime import datetime, time
+
+    from custom_components.ha_calories_buddy.core.models import (
+        ConfidenceLevel,
+        Macros,
+        MealLog,
+        MealLogItem,
+        MealPlan,
+        MealPlanDay,
+        MealPlanItem,
+        MealStatus,
+        PlanItemStatus,
+        PreparationState,
+    )
+
+    today = dt_util.now().date()
+    retro_logged_at = datetime.combine(
+        today, time(hour=22, minute=0), tzinfo=dt_util.get_default_time_zone()
+    )
+    retro_meal = MealLog(
+        log_id="retro_colazione_test",
+        person_id="person_marco",
+        log_date=today,
+        logged_at=retro_logged_at,
+        meal_slot="Colazione",
+        status=MealStatus.CONFIRMED,
+        total_macros=Macros(kcal=120, protein_g=4, carbs_g=20, fat_g=2, fiber_g=3.5),
+        confidence=ConfidenceLevel.HIGH,
+        source_channel="manual",
+        items=[
+            MealLogItem(
+                item_id="retro_item_1",
+                log_id="retro_colazione_test",
+                display_name="Avena test",
+                input_quantity=30,
+                input_unit="g",
+                input_state=PreparationState.RAW,
+                resolved_grams_ref=30,
+                macros=Macros(kcal=120, protein_g=4, carbs_g=20, fat_g=2, fiber_g=3.5),
+                confidence=ConfidenceLevel.HIGH,
+            )
+        ],
+    )
+    await runtime.meal_repo.create_meal_log(retro_meal)
+
+    # Save an active meal plan item for today so 📋 projection renders on calendar
+    plan = MealPlan(
+        plan_id="plan_cal_test",
+        person_id="person_marco",
+        start_date=today,
+        end_date=today,
+        status="active",
+        days=[
+            MealPlanDay(
+                plan_day_id="pday_cal_test",
+                plan_id="plan_cal_test",
+                plan_date=today,
+                target_macros=Macros(
+                    kcal=2200.0, protein_g=140.0, carbs_g=250.0, fat_g=70.0, fiber_g=31.0
+                ),
+                items=[
+                    MealPlanItem(
+                        plan_item_id="pitem_cal_test",
+                        plan_day_id="pday_cal_test",
+                        meal_slot="Cena",
+                        title="Salmone al forno",
+                        macros=Macros(
+                            kcal=620, protein_g=42, carbs_g=45, fat_g=28, fiber_g=8.0
+                        ),
+                        status=PlanItemStatus.PLANNED,
+                    )
+                ],
+            )
+        ],
+    )
+    await runtime.plan_repo.save_plan(plan)
+
     now = dt_util.now()
     events = await hass.services.async_call(
         "calendar",
         "get_events",
         {
             "entity_id": marco_cals[0].entity_id,
-            "start_date_time": (now - timedelta(hours=12)).isoformat(),
-            "end_date_time": (now + timedelta(hours=12)).isoformat(),
+            "start_date_time": (now - timedelta(hours=24)).isoformat(),
+            "end_date_time": (now + timedelta(hours=24)).isoformat(),
         },
         blocking=True,
         return_response=True,
@@ -168,3 +273,7 @@ async def test_sensors_unit_conversion_unavailable_fallback_and_calendars(
     cal_events = events[marco_cals[0].entity_id]["events"]
     assert any("Pranzo" in ev["summary"] for ev in cal_events)
     assert any("📊" in ev["summary"] for ev in cal_events)
+    assert any("📋" in ev["summary"] and "Salmone al forno" in ev["summary"] for ev in cal_events)
+    assert any("Fib" in ev.get("description", "") for ev in cal_events)
+    retro_ev = next(ev for ev in cal_events if "Avena test" in ev["summary"])
+    assert retro_ev["start"][11:16] == "08:00"

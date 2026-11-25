@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/HACS%20%2F%20Marketplace-Custom%20Integration-blue" alt="HACS / Marketplace" />
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License" />
   <img src="https://img.shields.io/badge/Languages-EN%20%7C%20IT-orange" alt="English and Italian" />
-  <img src="https://img.shields.io/badge/Tests-23%20Passing%20(88%25%20Core%20Cov)-brightgreen" alt="Tests Passing" />
+  <img src="https://img.shields.io/badge/Tests-36%20Passing%20(90%25%20Core%20Cov)-brightgreen" alt="Tests Passing" />
 </p>
 
 **HA Calories Buddy** is a privacy-first, multi-person, AI-assisted **personal dietitian, food diary, and nutrition hub** built natively as a Home Assistant Custom Integration with an auto-registered Lovelace Custom Card.
@@ -19,16 +19,17 @@ Log meals naturally by voice (**Home Assistant Assist**), free text, manual sear
 ## Key Features
 
 - **1 Household Hub + N Person Profiles:** Instantiate one isolated profile per household member, mapped directly to Home Assistant `person.*` entities and `user_id`s so voice and dashboard actions route automatically.
-- **LLM as Parser, Python as Source of Truth:** Supports **OpenAI**, **Anthropic (Claude)**, **Google Gemini**, **Ollama**, and **OpenAI-Compatible** endpoints (LM Studio, OpenRouter, vLLM, Groq) with automatic JSON schema-repair retries—or `none` for 100% offline manual & barcode usage. LLMs never calculate final calories or sum macros.
-- **4-Tier Food Resolution Waterfall & Two-Tier Food Vault:**
+- **LLM as Chef & Parser, Python as Source of Truth:** Supports **Home Assistant AI Task (`ai_task.*`)** (reuse any official HA AI integration with zero duplicated API keys), **OpenAI**, **Anthropic (Claude)**, **Google Gemini**, **Ollama**, and **OpenAI-Compatible** endpoints (LM Studio, OpenRouter, vLLM, Groq) with automatic JSON schema-repair retries—or `none` for 100% offline manual & barcode usage. LLMs never calculate final calories or sum macros.
+- **4-Tier Food Resolution Waterfall & Paginated Two-Tier Food Vault:**
   1. **Personal Food Overrides** (custom macros, preferred aliases, personal portions like `tbsp=12g`, custom yield factors)
-  2. **Global Household Food Vault** (SQLite WAL persistence with ~65 bilingual IT/EN staples pre-seeded)
+  2. **Global Household Food Vault** (non-blocking SQLite WAL storage with 68 bilingual IT/EN staples, category filters, state-aware raw/cooked ranking, and full pagination)
   3. **Open Food Facts** (barcodes & branded EU/Italian products) + optional **USDA FoodData Central**
   4. **Last-Resort AI Estimate** (explicitly flagged for 1-tap confirmation and optional Vault promotion)
-- **Raw ↔ Cooked Precision & Atwater Guardrails:** Handles dry vs. cooked weight conversions via category yield factors (`rice 2.5x`, `pasta 2.2x`, `legumes 2.4x`, `poultry 0.75x`), detects ambiguous omitted states (e.g., *"250g lentils"*), and validates product labels against EU/US Atwater factors ($4P + 4C + 9F + 2\text{Fiber}$).
-- **Physiology & Wearable Integration (Energy-Dashboard Style):** Map existing HA sensors for weight (`kg`/`lb`), body fat `%`, Garmin active/total calories (`kcal`/`kJ`), steps, `todo.*` shopping lists, and `notify.*` services. Uses Katch-McArdle / Mifflin-St Jeor BMR and a **7-day completed-day wearable baseline** (preventing morning budget starvation and PAL double-counting), plus full **Manual / Nutritionist Mode** with optional training-day targets.
-- **Unified Color-Coded Calendars & 9 Sensors per Person:** Each person gets a distinct colored `calendar` entity and 9 diagnostic/metric sensors (`calories_consumed`, `calories_target`, `calories_remaining`, macros, `tdee`, `pending_confirmations`, `daily_adherence_pct`).
-- **Auto-Registered Custom Card (`en` / `it`):** Zero-build modular ES Web Component card with live camera / manual EAN barcode scanner, hybrid confirmation workflow, inline item editing, and Food Vault manager.
+- **Raw ↔ Cooked Precision, Fiber & Atwater Guardrails:** Handles dry vs. cooked weight conversions (`rice 2.5x`, `pasta 2.2x`, `legumes 2.4x`, `poultry 0.75x`), prioritizes exact preparation state matches, tracks **dietary fiber (`g`)** end-to-end (`14g / 1000 kcal` clamped `20–45g` physiological default or manual overrides), validates labels against EU/US Atwater factors ($4P + 4C + 9F + 2\text{Fiber}$), and normalizes ambiguous meal slots deterministically by time of day.
+- **AI Dietitian & Chef (Phase 2):** Two-tier **Global Household + Personal Preference Engine** with a deterministic **Zero-Trust Hard-Constraint Gate** for allergies, intolerances, blacklists, and dietary regimes (`vegan`, `vegetarian`, `pescatarian`, `keto`, etc.); on-demand `Suggest Meal`; 1–7 day macro-scaled meal plans (with optional **Meal Prep Batch Mode**) accurate within `±5%`; 1-tap meal promotion (`Eaten`) and single-slot swap; plus intra-day & multi-day dynamic rebalancing honoring strict physiological calorie/fat floors.
+- **Physiology & Wearable Integration (Energy-Dashboard Style):** Map existing HA sensors for weight (`kg`/`lb`), body fat `%`, Garmin active/total calories (`kcal`/`kJ`), steps, `todo.*` shopping lists, and `notify.*` services. Uses Katch-McArdle / Mifflin-St Jeor BMR and a **7-day completed-day wearable baseline**, plus full **Manual / Nutritionist Mode** with rest/training targets.
+- **Unified Color-Coded Calendars & 10 Sensors per Person:** Each person gets a distinct colored `calendar` entity projecting logged meals (`🍽️`, slot-anchored), planned meals (`📋`), and daily summaries (`📊`), plus 10 sensors (`calories_consumed`, `calories_target`, `calories_remaining`, protein, carbs, fat, `fiber_consumed`, `tdee`, `pending_confirmations`, `daily_adherence_pct`).
+- **Auto-Registered Custom Card v2 (`en` / `it`):** Zero-build modular ES Web Component card with 4 views (**Today**, **Plan**, **Food Vault**, **Preferences**), inline SVG **Macro Distribution Donut Chart** (*Consumed* vs. *Target*), 1-tap inline meal-slot pills, live EAN barcode scanner, hybrid confirmation workflow, and paginated Food Vault browsing.
 
 ---
 
@@ -44,18 +45,14 @@ Log meals naturally by voice (**Home Assistant Assist**), free text, manual sear
 
 ```mermaid
 flowchart LR
-    VOICE["HA Assist Voice / Text"] --> PARSE["LLM Parser (Cloud or Local)"]
-    CARD["Custom Card & Barcode Scanner"] --> RESOLVE
-    PARSE --> RESOLVE["4-Tier Food Resolver (Override -> Vault -> OFF/USDA -> AI Fallback)"]
-    RESOLVE --> MATH["Deterministic Math (Units, Raw/Cooked Yield, EU/US Atwater)"]
-    MATH --> HYBRID{"High Confidence?"}
-    HYBRID -- Yes --> CONF["Saved: Confirmed"]
-    HYBRID -- No --> PEND["Saved: Pending Confirmation"]
-    CONF --> DB[("SQLite WAL Storage")]
-    PEND --> DB
+    VOICE["HA Assist Voice / Text (7 Tools)"] --> PARSE["LLM Chef & Parser (HA AI Task / Cloud / Ollama)"]
+    CARD["Custom Card v2 & Barcode Scanner"] --> RESOLVE
+    PARSE --> RESOLVE["4-Tier State-Aware Resolver & Zero-Trust Safety Gate"]
+    RESOLVE --> MATH["Deterministic Math (Yield, Atwater, Fiber, Macro Scaler)"]
+    MATH --> STORAGE[("Non-Blocking SQLite WAL")]
     HA_SENS["Garmin / Scale Sensors"] --> PHYS["BMR + TDEE + Targets Engine"]
-    PHYS --> DB
-    DB --> ENT["9 Sensors + Colored Calendar + Card"]
+    PHYS --> STORAGE
+    STORAGE --> ENT["10 Sensors + Colored Calendar (🍽️ 📋 📊) + Card v2"]
 ```
 
 ---
@@ -94,7 +91,7 @@ flowchart LR
 | Phase | Scope | Status |
 | :--- | :--- | :--- |
 | **Phase 1 — MVP** | Multi-person Hub + Person ConfigFlow, SQLite two-tier Food Vault, Open Food Facts + Barcode scanner, EU/US Atwater & raw/cooked yield math, Cloud + Local LLMs, Assist `llm.API`, BMR/TDEE + Garmin/scale mapping, Sensors + Colored Calendar, Custom Card v1 (`en`/`it`). | **Completed (`v0.1.0`)** |
-| **Phase 2 — Dietitian & Chef** | Two-tier taste/brand preference learning, on-demand recipe proposals, deterministic macro-scaled daily/weekly meal plans, single-slot swap, intra-day & multi-day rebalancing, Plan view in Custom Card. | Planned |
+| **Phase 2 — Dietitian & Chef** | Two-tier taste/brand preference learning + Zero-Trust Hard-Constraint Gate, HA `ai_task.*` LLM provider, full Fiber tracking (10 sensors), on-demand recipe proposals, deterministic `±5%` macro-scaled 1–7d meal plans (`meal_prep_mode`), swap/promote, intra-day & multi-day rebalancing, Paginated Vault, Macro Pie Chart, 7 Assist tools, 14 services, Custom Card v2 (`Today`, `Plan`, `Food Vault`, `Preferences`). | **Completed (`v0.2.0`)** |
 | **Phase 3 — Butler & Adaptive TDEE** | Editable weekly shopping draft synced to `todo.*`, MacroFactor-style Adaptive TDEE (EMA weight trend vs. intake), composite homemade recipes, Trends SVG charts. | Planned |
 
 ---

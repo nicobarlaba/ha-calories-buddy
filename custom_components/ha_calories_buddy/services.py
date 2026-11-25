@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import probatio as vol
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.util import dt as dt_util
 
 from custom_components.ha_calories_buddy.const import (
     ATTR_BARCODE,
@@ -28,8 +29,20 @@ from custom_components.ha_calories_buddy.const import (
 )
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
+    Macros,
     PersonProfile,
+    PlanGenerationOptions,
+    PreferenceScope,
+    PreferenceStance,
     PreparationState,
+)
+from custom_components.ha_calories_buddy.core.physiology.targets import TargetResult
+from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
+    allocate_slot_targets,
+)
+from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    default_slots_for_language,
+    resolve_meal_slot,
 )
 from custom_components.ha_calories_buddy.identity import (
     PersonAmbiguousError,
@@ -89,6 +102,21 @@ async def _refresh_person(hass: HomeAssistant, person_id: str) -> None:
         await person_rt.coordinator.async_request_refresh()
 
 
+async def _require_targets(
+    hass: HomeAssistant, profile: PersonProfile
+) -> tuple[TargetResult, float, float]:
+    runtime: DomainRuntime = hass.data[DOMAIN]
+    person_rt = runtime.persons.get(profile.person_id)
+    if person_rt is None:
+        raise HomeAssistantError("Person profile is not active")
+    if person_rt.coordinator.data is None:
+        await person_rt.coordinator.async_refresh()
+    data = person_rt.coordinator.data
+    if data is None:
+        raise HomeAssistantError("Person dashboard state not ready")
+    return data.targets, data.tdee.bmr_kcal, data.weight_kg
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     """Register domain services on Home Assistant."""
 
@@ -112,10 +140,11 @@ def async_register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(str(exc)) from exc
 
         await _refresh_person(hass, profile.person_id)
-        if result.warnings:
-            msg = f"{result.summary_message}\n" + " ".join(result.warnings)
-        else:
-            msg = result.summary_message
+        msg = (
+            f"{result.summary_message}\n" + " ".join(result.warnings)
+            if result.warnings
+            else result.summary_message
+        )
         await _maybe_notify(hass, profile, f"Calories Buddy — {profile.display_name}", msg)
         return {
             "summary": result.summary_message,
@@ -143,7 +172,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             quantity=float(call.data[ATTR_QUANTITY]),
             unit=str(call.data.get(ATTR_UNIT, "g")),
             state=state,
-            meal_slot=str(call.data.get(ATTR_MEAL_SLOT, "Snack")),
+            meal_slot=call.data.get(ATTR_MEAL_SLOT),
             log_date=log_d,
             source_channel="manual",
         )
@@ -188,6 +217,19 @@ def async_register_services(hass: HomeAssistant) -> None:
         await _refresh_person(hass, profile.person_id)
         return {"meal_log": updated.model_dump(mode="json")}
 
+    async def handle_update_meal_slot(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        updated = await runtime.logging_service.change_meal_slot(
+            profile,
+            str(call.data[ATTR_LOG_ID]),
+            str(call.data[ATTR_MEAL_SLOT]),
+        )
+        if updated is None:
+            raise HomeAssistantError("Meal log not found")
+        await _refresh_person(hass, profile.person_id)
+        return {"meal_log": updated.model_dump(mode="json")}
+
     async def handle_delete_meal(call: ServiceCall) -> dict[str, Any]:
         runtime: DomainRuntime = hass.data[DOMAIN]
         profile = _resolve_target_person(hass, call)
@@ -219,6 +261,141 @@ def async_register_services(hass: HomeAssistant) -> None:
         await person_rt.coordinator.async_request_refresh()
         return {"snapshot": snap.model_dump(mode="json")}
 
+    async def handle_suggest_meal(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        targets, _, _ = await _require_targets(hass, profile)
+        slots = profile.meal_slots or default_slots_for_language(profile.language)
+        slot_name = resolve_meal_slot(
+            call.data.get(ATTR_MEAL_SLOT), slots, language=profile.language
+        )
+        slot_targets = allocate_slot_targets(targets, slots)
+        slot_macro = slot_targets.get(
+            slot_name,
+            Macros(
+                kcal=targets.target_kcal * 0.35,
+                protein_g=targets.protein_g * 0.35,
+                carbs_g=targets.carbs_g * 0.35,
+                fat_g=targets.fat_g * 0.35,
+                fiber_g=targets.fiber_g * 0.35,
+            ),
+        )
+        try:
+            suggestions = await runtime.planner_service.suggest_meal(
+                profile,
+                meal_slot=slot_name,
+                target_macros=slot_macro,
+                user_hint=str(call.data.get("hint") or ""),
+                max_cook_minutes=call.data.get("max_cook_minutes"),
+                count=int(call.data.get("count", 3)),
+            )
+        except Exception as exc:
+            raise HomeAssistantError(str(exc)) from exc
+        return {
+            "suggestions": [s.model_dump(mode="json") for s in suggestions],
+        }
+
+    async def handle_generate_meal_plan(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        targets, _, _ = await _require_targets(hass, profile)
+        start_d = (
+            date.fromisoformat(call.data["start_date"])
+            if call.data.get("start_date")
+            else dt_util.now().date()
+        )
+        options = PlanGenerationOptions(
+            num_days=int(call.data.get("num_days", 7)),
+            meal_prep_mode=bool(call.data.get("meal_prep_mode", False)),
+            notes=str(call.data.get("notes") or ""),
+        )
+        try:
+            plan = await runtime.planner_service.generate_meal_plan(
+                profile,
+                start_date=start_d,
+                daily_targets=targets,
+                options=options,
+            )
+        except Exception as exc:
+            raise HomeAssistantError(str(exc)) from exc
+        await _refresh_person(hass, profile.person_id)
+        return {"plan": plan.model_dump(mode="json")}
+
+    async def handle_swap_plan_meal(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        try:
+            updated = await runtime.planner_service.swap_plan_meal(
+                profile,
+                str(call.data["plan_item_id"]),
+                user_instruction=str(call.data.get("instruction") or ""),
+            )
+        except Exception as exc:
+            raise HomeAssistantError(str(exc)) from exc
+        await _refresh_person(hass, profile.person_id)
+        return {"plan_item": updated.model_dump(mode="json")}
+
+    async def handle_promote_plan_meal(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        try:
+            logged = await runtime.planner_service.promote_plan_meal(
+                profile,
+                str(call.data["plan_item_id"]),
+                actual_scale=float(call.data.get("scale", 1.0)),
+            )
+        except Exception as exc:
+            raise HomeAssistantError(str(exc)) from exc
+        await _refresh_person(hass, profile.person_id)
+        return {"meal_log": logged.model_dump(mode="json")}
+
+    async def handle_rebalance_today(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        targets, bmr_kcal, weight_kg = await _require_targets(hass, profile)
+        target_d = (
+            date.fromisoformat(call.data[ATTR_DATE])
+            if call.data.get(ATTR_DATE)
+            else dt_util.now().date()
+        )
+        spread_days = call.data.get("spread_days")
+        if spread_days is not None:
+            totals = await runtime.meal_repo.get_daily_totals(
+                profile.person_id, target_d
+            )
+            excess = totals.consumed.kcal - targets.target_kcal
+            res = await runtime.rebalancer_service.rebalance_multiday(
+                profile,
+                start_date=target_d,
+                excess_kcal=excess,
+                bmr_kcal=bmr_kcal,
+                weight_kg=weight_kg,
+                spread_days=int(spread_days),
+            )
+        else:
+            res = await runtime.rebalancer_service.rebalance_intraday(
+                profile,
+                target_date=target_d,
+                daily_targets=targets,
+                allow_llm_swap=bool(call.data.get("allow_llm_swap", True)),
+            )
+        await _refresh_person(hass, profile.person_id)
+        return {"rebalance": res.model_dump(mode="json")}
+
+    async def handle_set_preference(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        scope = PreferenceScope(str(call.data["scope"]))
+        pref = await runtime.preference_repo.upsert_preference(
+            scope=scope,
+            person_id=profile.person_id if scope == PreferenceScope.PERSON else None,
+            target_type=str(call.data["target_type"]),
+            target_value=str(call.data["target_value"]),
+            stance=PreferenceStance(str(call.data["stance"])),
+            notes=str(call.data.get("notes") or ""),
+        )
+        return {"preference": pref.model_dump(mode="json")}
+
     hass.services.async_register(
         DOMAIN,
         "log_meal_text",
@@ -245,7 +422,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                 vol.Required(ATTR_QUANTITY): vol.Coerce(float),
                 vol.Optional(ATTR_UNIT, default="g"): cv.string,
                 vol.Optional(ATTR_STATE, default="unspecified"): cv.string,
-                vol.Optional(ATTR_MEAL_SLOT, default="Snack"): cv.string,
+                vol.Optional(ATTR_MEAL_SLOT): cv.string,
                 vol.Optional(ATTR_PERSON): cv.string,
                 vol.Optional(ATTR_DATE): cv.string,
             }
@@ -276,6 +453,19 @@ def async_register_services(hass: HomeAssistant) -> None:
                 vol.Required(ATTR_QUANTITY): vol.Coerce(float),
                 vol.Optional(ATTR_UNIT): cv.string,
                 vol.Optional(ATTR_STATE): cv.string,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "update_meal_slot",
+        handle_update_meal_slot,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_LOG_ID): cv.string,
+                vol.Required(ATTR_MEAL_SLOT): cv.string,
                 vol.Optional(ATTR_PERSON): cv.string,
             }
         ),
@@ -317,3 +507,91 @@ def async_register_services(hass: HomeAssistant) -> None:
         ),
         supports_response=SupportsResponse.OPTIONAL,
     )
+    hass.services.async_register(
+        DOMAIN,
+        "suggest_meal",
+        handle_suggest_meal,
+        schema=vol.Schema(
+            {
+                vol.Optional(ATTR_MEAL_SLOT): cv.string,
+                vol.Optional("hint"): cv.string,
+                vol.Optional("max_cook_minutes"): vol.Coerce(int),
+                vol.Optional("count", default=3): vol.Coerce(int),
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "generate_meal_plan",
+        handle_generate_meal_plan,
+        schema=vol.Schema(
+            {
+                vol.Optional("start_date"): cv.string,
+                vol.Optional("num_days", default=7): vol.Coerce(int),
+                vol.Optional("meal_prep_mode", default=False): cv.boolean,
+                vol.Optional("notes"): cv.string,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "swap_plan_meal",
+        handle_swap_plan_meal,
+        schema=vol.Schema(
+            {
+                vol.Required("plan_item_id"): cv.string,
+                vol.Optional("instruction"): cv.string,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "promote_plan_meal",
+        handle_promote_plan_meal,
+        schema=vol.Schema(
+            {
+                vol.Required("plan_item_id"): cv.string,
+                vol.Optional("scale", default=1.0): vol.Coerce(float),
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "rebalance_today",
+        handle_rebalance_today,
+        schema=vol.Schema(
+            {
+                vol.Optional(ATTR_DATE): cv.string,
+                vol.Optional("spread_days"): vol.Coerce(int),
+                vol.Optional("allow_llm_swap", default=True): cv.boolean,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "set_preference",
+        handle_set_preference,
+        schema=vol.Schema(
+            {
+                vol.Required("scope"): cv.string,
+                vol.Required("target_type"): cv.string,
+                vol.Required("target_value"): cv.string,
+                vol.Required("stance"): cv.string,
+                vol.Optional("notes"): cv.string,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    # Keep timedelta import clean if needed later; explicitly avoid unused import
+    _ = timedelta

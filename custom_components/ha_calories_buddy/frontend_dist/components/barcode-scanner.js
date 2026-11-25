@@ -1,24 +1,25 @@
-/** Barcode Scanner (Camera BarcodeDetector + Photo fallback + Manual EAN) */
+/** Barcode Scanner & Manual EAN Lookup Modal */
 import { t } from "../i18n/index.js";
-import { escapeHtml, round1 } from "../utils.js";
+import { escapeHtml, localizedFoodName, pickDefaultSlotForNow, round1 } from "../utils.js";
 
 export function openBarcodeScannerModal(host, ctx, callbacks) {
   const { language, api, personId, mealSlots } = ctx;
   const slots = mealSlots && mealSlots.length ? mealSlots : [{ name: "Breakfast" }, { name: "Lunch" }, { name: "Snack" }, { name: "Dinner" }];
-  const hasNativeDetector = typeof window !== "undefined" && "BarcodeDetector" in window;
-  const isSecure = typeof window !== "undefined" && window.isSecureContext;
+  const hasNativeDetector = "BarcodeDetector" in window;
+  const isSecure = window.isSecureContext || ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
   let stream = null;
-  let scanning = false;
   let rafId = null;
+  let scanning = false;
+  let statusMsg = "";
   let currentEan = "";
   let foundFood = null;
   let notFound = false;
-  let statusMsg = "";
+  let chosenSlot = pickDefaultSlotForNow(slots);
 
   const stopCamera = () => {
     scanning = false;
-    if (rafId !== null) {
+    if (rafId) {
       cancelAnimationFrame(rafId);
       rafId = null;
     }
@@ -34,7 +35,7 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
   };
 
   const doLookup = async (ean) => {
-    const clean = (ean || "").replace(/\D/g, "");
+    const clean = String(ean || "").trim();
     if (!clean) return;
     currentEan = clean;
     statusMsg = "";
@@ -43,40 +44,39 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
     render();
     try {
       const resp = await api.lookupBarcode(personId, clean);
-      if (resp && resp.food) {
+      if (resp?.food) {
         foundFood = resp.food;
-        notFound = false;
       } else {
-        foundFood = null;
         notFound = true;
       }
     } catch (err) {
-      statusMsg = err?.message || "Lookup error";
+      statusMsg = err?.message || "Lookup failed";
     }
     render();
   };
 
   const startCamera = async () => {
-    if (!isSecure || !navigator.mediaDevices?.getUserMedia || !hasNativeDetector) {
+    if (!navigator.mediaDevices?.getUserMedia || !hasNativeDetector) {
       statusMsg = t(language, "camera_https_hint");
       render();
       return;
     }
     try {
+      statusMsg = "";
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
       });
       scanning = true;
       render();
       const video = host.querySelector("#barcode-video");
-      if (!video) return;
-      video.srcObject = stream;
-      await video.play();
-
+      if (video) {
+        video.srcObject = stream;
+        await video.play();
+      }
       const detector = new window.BarcodeDetector({
         formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"],
       });
-
       const tick = async () => {
         if (!scanning || !video || video.readyState < 2) {
           if (scanning) rafId = requestAnimationFrame(tick);
@@ -152,7 +152,7 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
               <div class="form-grid">
                 <div class="form-field full">
                   <label>${escapeHtml(t(language, "food_name_label"))}</label>
-                  <input type="text" id="bc-name" value="${escapeHtml(draft.name)}" />
+                  <input type="text" id="bc-name" value="${escapeHtml(foundFood ? localizedFoodName(foundFood, language) : draft.name)}" />
                 </div>
                 <div class="form-field">
                   <label>${escapeHtml(t(language, "brand_label"))}</label>
@@ -183,14 +183,23 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
                   <input type="number" step="0.1" id="bc-f" value="${round1(draft.macros_per_100g.fat_g)}" />
                 </div>
                 <div class="form-field">
-                  <label>${escapeHtml(t(language, "meal_slot_label"))}</label>
-                  <select id="bc-slot">
-                    ${slots.map((s) => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join("")}
-                  </select>
+                  <label>${escapeHtml(t(language, "fiber"))} (g)</label>
+                  <input type="number" step="0.1" id="bc-fib" value="${round1(draft.macros_per_100g.fiber_g || 0)}" />
                 </div>
                 <div class="form-field">
                   <label>${escapeHtml(t(language, "quantity_label"))} (g)</label>
                   <input type="number" step="1" min="1" id="bc-qty" value="100" />
+                </div>
+                <div class="form-field full">
+                  <label>${escapeHtml(t(language, "meal_slot_label"))}</label>
+                  <div class="quick-actions">
+                    ${slots
+                      .map(
+                        (s) =>
+                          `<button type="button" class="chip-btn bc-slot-chip ${chosenSlot === s.name ? "active" : ""}" data-slot="${escapeHtml(s.name)}">${escapeHtml(s.name)}</button>`
+                      )
+                      .join("")}
+                  </div>
                 </div>
               </div>
               <div class="meal-actions">
@@ -223,6 +232,13 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
       }
     });
 
+    host.querySelectorAll(".bc-slot-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        chosenSlot = chip.getAttribute("data-slot") || chosenSlot;
+        render();
+      });
+    });
+
     const collectFoodPayload = () => ({
       food_id: draft?.food_id || null,
       name: (host.querySelector("#bc-name")?.value || "").trim() || `Barcode ${currentEan}`,
@@ -233,6 +249,7 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
       protein_g_per_100g: Number(host.querySelector("#bc-p")?.value || 0),
       carbs_g_per_100g: Number(host.querySelector("#bc-c")?.value || 0),
       fat_g_per_100g: Number(host.querySelector("#bc-f")?.value || 0),
+      fiber_g_per_100g: Number(host.querySelector("#bc-fib")?.value || 0),
       verified: true,
       scope: "global",
     });
@@ -248,7 +265,6 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
     host.querySelector("#bc-save-and-log")?.addEventListener("click", async () => {
       const saved = await api.saveFood(personId, collectFoodPayload());
       const qty = Number(host.querySelector("#bc-qty")?.value || 100);
-      const slot = host.querySelector("#bc-slot")?.value || slots[0].name;
       closeModal();
       await callbacks.onLogFood({
         food_id: saved.food.food_id,
@@ -256,7 +272,7 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
         quantity: qty,
         unit: "g",
         state: saved.food.preparation_state,
-        meal_slot: slot,
+        meal_slot: chosenSlot,
       });
     });
   };

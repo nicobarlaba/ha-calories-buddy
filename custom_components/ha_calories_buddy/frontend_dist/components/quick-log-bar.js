@@ -1,9 +1,9 @@
-/** Quick Meal Log Bar + Manual Search Modal */
+/** Quick Meal Log Bar + Manual Search Modal with smart slot selection */
 import { t } from "../i18n/index.js";
-import { escapeHtml, round1 } from "../utils.js";
+import { escapeHtml, localizedFoodName, pickDefaultSlotForNow, round1 } from "../utils.js";
 
 export function renderQuickLogBar(container, state, callbacks) {
-  const { language, llmEnabled, mealSlots, busy } = state;
+  const { language, llmEnabled, mealSlots, busy, selectedAiSlot } = state;
   const slots = mealSlots && mealSlots.length ? mealSlots : [{ name: "Breakfast" }, { name: "Lunch" }, { name: "Snack" }, { name: "Dinner" }];
 
   container.innerHTML = `
@@ -19,7 +19,20 @@ export function renderQuickLogBar(container, state, callbacks) {
           ${escapeHtml(t(language, "log_ai_btn"))}
         </button>
       </div>
-      ${!llmEnabled ? `<div class="hint-text">${escapeHtml(t(language, "llm_disabled_hint"))}</div>` : ""}
+      ${
+        llmEnabled
+          ? `<div class="quick-actions">
+              <span class="hint-text">${escapeHtml(t(language, "meal_slot_label"))}:</span>
+              <button type="button" class="chip-btn ai-slot-chip ${!selectedAiSlot ? "active" : ""}" data-slot="">${escapeHtml(t(language, "auto_slot_option"))}</button>
+              ${slots
+                .map(
+                  (s) =>
+                    `<button type="button" class="chip-btn ai-slot-chip ${selectedAiSlot === s.name ? "active" : ""}" data-slot="${escapeHtml(s.name)}">${escapeHtml(s.name)}</button>`
+                )
+                .join("")}
+            </div>`
+          : `<div class="hint-text">${escapeHtml(t(language, "llm_disabled_hint"))}</div>`
+      }
       <div class="quick-actions">
         <button type="button" class="secondary" id="open-manual-btn">${escapeHtml(t(language, "manual_log_btn"))}</button>
         <button type="button" class="secondary" id="open-barcode-btn">📷 ${escapeHtml(t(language, "barcode_btn"))}</button>
@@ -33,7 +46,7 @@ export function renderQuickLogBar(container, state, callbacks) {
   const submitAi = () => {
     const val = (input?.value || "").trim();
     if (val) {
-      callbacks.onLogText(val);
+      callbacks.onLogText(val, state.selectedAiSlot || null);
       input.value = "";
     }
   };
@@ -43,6 +56,13 @@ export function renderQuickLogBar(container, state, callbacks) {
       ev.preventDefault();
       submitAi();
     }
+  });
+
+  container.querySelectorAll(".ai-slot-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const slot = chip.getAttribute("data-slot") || null;
+      callbacks.onSelectAiSlot?.(slot);
+    });
   });
 
   container.querySelector("#open-barcode-btn")?.addEventListener("click", () => {
@@ -62,6 +82,7 @@ function openManualSearchModal(host, ctx, onLogItem) {
   const { language, slots, api, personId } = ctx;
   let searchResults = [];
   let selectedFood = null;
+  let chosenSlot = pickDefaultSlotForNow(slots);
 
   const renderModal = () => {
     host.innerHTML = `
@@ -81,13 +102,13 @@ function openManualSearchModal(host, ctx, onLogItem) {
                 (f, idx) => `
                 <div class="food-list-item">
                   <div>
-                    <strong>${escapeHtml(f.preferred_alias || f.name)}</strong>
+                    <strong>${escapeHtml(localizedFoodName(f, language))}</strong>
                     ${f.brand ? `<span class="pill">${escapeHtml(f.brand)}</span>` : ""}
                     <div class="meal-item-meta">
                       ${round1(f.macros_per_100g.kcal)} kcal | P ${round1(f.macros_per_100g.protein_g)}g C ${round1(f.macros_per_100g.carbs_g)}g F ${round1(f.macros_per_100g.fat_g)}g (${escapeHtml(t(language, "per_100g"))})
                     </div>
                   </div>
-                  <button type="button" class="secondary pick-food-btn" data-idx="${idx}">Select</button>
+                  <button type="button" class="secondary pick-food-btn" data-idx="${idx}">+</button>
                 </div>
               `
               )
@@ -97,14 +118,16 @@ function openManualSearchModal(host, ctx, onLogItem) {
             selectedFood
               ? `
               <div class="meal-card">
-                <div style="font-weight: 600; margin-bottom: 8px;">${escapeHtml(selectedFood.preferred_alias || selectedFood.name)}</div>
+                <div style="font-weight: 600; margin-bottom: 8px;">${escapeHtml(localizedFoodName(selectedFood, language))}</div>
+                <div class="quick-actions" style="margin-bottom: 8px;">
+                  ${slots
+                    .map(
+                      (s) =>
+                        `<button type="button" class="chip-btn manual-slot-chip ${chosenSlot === s.name ? "active" : ""}" data-slot="${escapeHtml(s.name)}">${escapeHtml(s.name)}</button>`
+                    )
+                    .join("")}
+                </div>
                 <div class="form-grid">
-                  <div class="form-field">
-                    <label>${escapeHtml(t(language, "meal_slot_label"))}</label>
-                    <select id="manual-slot">
-                      ${slots.map((s) => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join("")}
-                    </select>
-                  </div>
                   <div class="form-field">
                     <label>${escapeHtml(t(language, "state_label"))}</label>
                     <select id="manual-state">
@@ -138,7 +161,7 @@ function openManualSearchModal(host, ctx, onLogItem) {
     const runSearch = async () => {
       const q = (host.querySelector("#manual-search-q")?.value || "").trim();
       if (!q) return;
-      const resp = await api.searchFoods(personId, q, true);
+      const resp = await api.searchFoods(personId, q, true, { limit: 25, offset: 0 });
       searchResults = resp.foods || [];
       selectedFood = searchResults[0] || null;
       renderModal();
@@ -162,20 +185,26 @@ function openManualSearchModal(host, ctx, onLogItem) {
       });
     });
 
+    host.querySelectorAll(".manual-slot-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        chosenSlot = chip.getAttribute("data-slot") || chosenSlot;
+        renderModal();
+      });
+    });
+
     host.querySelector("#confirm-manual-log")?.addEventListener("click", async () => {
       if (!selectedFood) return;
       const qty = Number(host.querySelector("#manual-qty")?.value || 100);
       const unit = (host.querySelector("#manual-unit")?.value || "g").trim();
       const state = host.querySelector("#manual-state")?.value || "unspecified";
-      const slot = host.querySelector("#manual-slot")?.value || slots[0].name;
       host.innerHTML = "";
       await onLogItem({
         food_id: selectedFood.food_id,
-        name: selectedFood.name,
+        name: localizedFoodName(selectedFood, language),
         quantity: qty,
         unit,
         state,
-        meal_slot: slot,
+        meal_slot: chosenSlot,
       });
     });
   };

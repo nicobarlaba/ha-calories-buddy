@@ -36,6 +36,7 @@ def build_meal_parse_prompts(
     profile: PersonProfile,
     utterance: str,
     frequent_foods: list[dict[str, Any]] | None = None,
+    current_local_time: str | None = None,
 ) -> tuple[str, str]:
     """Build lean, language-aware system and user prompts for meal extraction."""
     slot_names = [s.name for s in profile.meal_slots] or (
@@ -52,6 +53,10 @@ def build_meal_parse_prompts(
             formatted.append(f"{name} ({brand})" if brand else str(name))
         hints = f"\nUser's frequent/preferred foods: {', '.join(formatted)}."
 
+    time_line = (
+        f"Current local time: {current_local_time}. " if current_local_time else ""
+    )
+
     system_prompt = (
         "You are a precise nutrition utterance parser. "
         "Extract every food item consumed, preserving any mentioned brand separately in `brand`, "
@@ -61,7 +66,9 @@ def build_meal_parse_prompts(
         "- 'raw' if the user says raw/dry/crudo/cruda/secco/secche\n"
         "- 'ready_to_eat' for oils, yogurt, milk, bread, fruit, nuts, canned drained items if specified\n"
         "- 'unspecified' when preparation state is not explicitly stated.\n"
-        f"Available meal_slot values: {', '.join(slot_names)}."
+        f"{time_line}Choose `meal_slot` strictly from this exact list: {', '.join(slot_names)}. "
+        "If the utterance names a meal (e.g., colazione/breakfast, pranzo/lunch, spuntino/snack, cena/dinner), use that matching slot; "
+        "otherwise pick the best slot for the current time and food context. Never output 'unspecified'."
         f"{hints}\n"
         "Never invent extra foods and never compute total calories."
     )

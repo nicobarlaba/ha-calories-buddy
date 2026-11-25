@@ -23,6 +23,7 @@ from custom_components.ha_calories_buddy.core.models import (
     BiometricSnapshot,
     DailyTotals,
     MealLog,
+    MealPlanItem,
     PersonProfile,
     TDEEEngineType,
 )
@@ -57,6 +58,7 @@ class PersonDashboardState:
     targets: TargetResult
     totals: DailyTotals
     meals: list[MealLog]
+    planned_today: list[MealPlanItem]
     latest_weight_kg: float | None = None
 
 
@@ -268,6 +270,9 @@ class PersonNutritionCoordinator(DataUpdateCoordinator[PersonDashboardState]):
         meals = await self.runtime.meal_repo.list_meals_for_date(
             self.profile.person_id, today
         )
+        planned_pairs = await self.runtime.plan_repo.get_plan_items_for_range(
+            self.profile.person_id, today, today
+        )
 
         return PersonDashboardState(
             profile=self.profile,
@@ -281,6 +286,7 @@ class PersonNutritionCoordinator(DataUpdateCoordinator[PersonDashboardState]):
             targets=targets,
             totals=totals,
             meals=meals,
+            planned_today=[item for _, item in planned_pairs],
             latest_weight_kg=weight_kg,
         )
 

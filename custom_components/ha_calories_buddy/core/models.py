@@ -159,6 +159,7 @@ class FoodItem(BaseModel):
 
     food_id: str
     name: str
+    name_it: str | None = None
     normalized_name: str
     aliases: list[str] = Field(default_factory=list)
     brand: str | None = None
@@ -197,6 +198,7 @@ class EffectiveFood(BaseModel):
 
     food_id: str
     name: str
+    name_it: str | None = None
     normalized_name: str
     aliases: list[str] = Field(default_factory=list)
     preferred_alias: str | None = None
@@ -213,6 +215,14 @@ class EffectiveFood(BaseModel):
     has_override: bool = False
     food_portions: dict[str, float] = Field(default_factory=dict)
     person_portions: dict[str, float] = Field(default_factory=dict)
+
+    def localized_name(self, language: str = "en") -> str:
+        """Return person alias first, then Italian seed name when IT is active, else base name."""
+        if self.preferred_alias:
+            return self.preferred_alias
+        if language == "it" and self.name_it:
+            return self.name_it
+        return self.name
 
 
 class MealSlotConfig(BaseModel):
@@ -244,10 +254,12 @@ class ManualMacroTarget(BaseModel):
     protein_g: float = Field(ge=0.0)
     carbs_g: float = Field(ge=0.0)
     fat_g: float = Field(ge=0.0)
+    fiber_g: float | None = Field(default=None, ge=0.0)
     training_kcal: float | None = Field(default=None, gt=0.0)
     training_protein_g: float | None = Field(default=None, ge=0.0)
     training_carbs_g: float | None = Field(default=None, ge=0.0)
     training_fat_g: float | None = Field(default=None, ge=0.0)
+    training_fiber_g: float | None = Field(default=None, ge=0.0)
 
 
 class LLMConfig(BaseModel):
@@ -257,6 +269,7 @@ class LLMConfig(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     model: str = ""
+    ai_task_entity: str | None = None
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     timeout_s: float = Field(default=30.0, gt=0.0)
     max_retries: int = Field(default=2, ge=0, le=5)
@@ -371,6 +384,57 @@ class BiometricSnapshot(BaseModel):
 # Phase 2 / Phase 3 forward-compatible domain models
 
 
+class IngredientRole(StrEnum):
+    """Functional role of an ingredient for bounded deterministic macro scaling."""
+
+    PROTEIN_ANCHOR = "protein_anchor"
+    CARB_ANCHOR = "carb_anchor"
+    FAT_ANCHOR = "fat_anchor"
+    PRODUCE_FIXED = "produce_fixed"
+    CONDIMENT_FIXED = "condiment_fixed"
+
+
+class PlannedIngredient(BaseModel):
+    """Resolved and macro-scaled ingredient belonging to a planned meal or recipe."""
+
+    food_id: str | None = None
+    name: str
+    brand: str | None = None
+    grams: float = Field(gt=0.0)
+    preparation_state: PreparationState = PreparationState.READY_TO_EAT
+    role: IngredientRole = IngredientRole.PRODUCE_FIXED
+    macros: Macros
+
+
+class RecipeDetail(BaseModel):
+    """Structured recipe metadata serialized into meal_plan_items.recipe_json."""
+
+    prep_minutes: int = Field(default=20, ge=0)
+    steps: list[str] = Field(default_factory=list)
+    tips: str = ""
+    macro_fit_warning: bool = False
+
+
+class MealFeedbackRating(StrEnum):
+    """User rating for a suggested or planned meal/recipe."""
+
+    LIKE = "like"
+    DISLIKE = "dislike"
+    NEVER_SUGGEST = "never_suggest"
+
+
+class MealFeedback(BaseModel):
+    """Persisted per-person rating on a dish/recipe signature."""
+
+    feedback_id: str
+    person_id: str
+    recipe_signature: str
+    title: str
+    rating: MealFeedbackRating
+    notes: str = ""
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class MealPlanItem(BaseModel):
     """Single planned meal in a MealPlanDay."""
 
@@ -381,7 +445,43 @@ class MealPlanItem(BaseModel):
     recipe_json: str = "{}"
     ingredients_json: str = "[]"
     macros: Macros
+    prep_minutes: int = 20
+    macro_fit_warning: bool = False
     status: PlanItemStatus = PlanItemStatus.PLANNED
+
+
+class MealSuggestion(BaseModel):
+    """On-demand AI-proposed & deterministically scaled meal option."""
+
+    title: str
+    meal_slot: str
+    prep_minutes: int = 20
+    steps: list[str] = Field(default_factory=list)
+    tips: str = ""
+    ingredients: list[PlannedIngredient] = Field(default_factory=list)
+    macros: Macros
+    macro_fit_warning: bool = False
+
+
+class PlanGenerationOptions(BaseModel):
+    """Options controlling multi-day meal plan generation."""
+
+    num_days: int = Field(default=7, ge=1, le=7)
+    meal_prep_mode: bool = False
+    notes: str = ""
+    max_cook_overrides: dict[str, int] = Field(default_factory=dict)
+
+
+class RebalanceResult(BaseModel):
+    """Result of an intra-day or multi-day meal plan rebalance."""
+
+    mode: str
+    updated_items: list[MealPlanItem] = Field(default_factory=list)
+    updated_days: list[date] = Field(default_factory=list)
+    remaining_before: Macros
+    remaining_after: Macros
+    safety_warnings: list[str] = Field(default_factory=list)
+    summary_message: str
 
 
 class MealPlanDay(BaseModel):

@@ -15,6 +15,7 @@ from custom_components.ha_calories_buddy.config_flow import merged_entry_config
 from custom_components.ha_calories_buddy.const import (
     CONF_ACTIVE_KCAL_ENTITY,
     CONF_ACTIVITY_LEVEL,
+    CONF_AI_TASK_ENTITY,
     CONF_ALLERGIES,
     CONF_BIRTH_YEAR,
     CONF_BLACKLIST,
@@ -38,10 +39,12 @@ from custom_components.ha_calories_buddy.const import (
     CONF_LLM_PROVIDER,
     CONF_MANUAL_CARBS_G,
     CONF_MANUAL_FAT_G,
+    CONF_MANUAL_FIBER_G,
     CONF_MANUAL_KCAL,
     CONF_MANUAL_PROTEIN_G,
     CONF_MANUAL_TRAINING_CARBS_G,
     CONF_MANUAL_TRAINING_FAT_G,
+    CONF_MANUAL_TRAINING_FIBER_G,
     CONF_MANUAL_TRAINING_KCAL,
     CONF_MANUAL_TRAINING_PROTEIN_G,
     CONF_MEAL_SLOTS,
@@ -90,9 +93,27 @@ from custom_components.ha_calories_buddy.core.nutrition.resolver import FoodReso
 from custom_components.ha_calories_buddy.core.planner.meal_parser import (
     MealLoggingService,
 )
+from custom_components.ha_calories_buddy.core.planner.meal_planner import (
+    MealPlannerService,
+)
+from custom_components.ha_calories_buddy.core.planner.preferences import (
+    PreferenceEngine,
+)
+from custom_components.ha_calories_buddy.core.planner.rebalancer import (
+    MealRebalancerService,
+)
+from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    slot_approx_minutes,
+)
 from custom_components.ha_calories_buddy.core.storage.database import Database
 from custom_components.ha_calories_buddy.core.storage.food_repo import FoodRepository
 from custom_components.ha_calories_buddy.core.storage.meal_repo import MealRepository
+from custom_components.ha_calories_buddy.core.storage.plan_repo import (
+    MealPlanRepository,
+)
+from custom_components.ha_calories_buddy.core.storage.preference_repo import (
+    PreferenceRepository,
+)
 from custom_components.ha_calories_buddy.core.storage.profile_repo import ProfileRepository
 from custom_components.ha_calories_buddy.core.storage.seeder import seed_database_if_empty
 from custom_components.ha_calories_buddy.frontend import async_register_frontend
@@ -120,12 +141,19 @@ def _extract_llm_config(cfg: dict[str, Any]) -> LLMConfig:
     api_key = str(cfg.get(CONF_LLM_API_KEY) or "").strip() or None
     base_url = str(cfg.get(CONF_LLM_BASE_URL) or "").strip() or None
     model = str(cfg.get(CONF_LLM_MODEL) or "").strip()
+    ai_task_entity = str(cfg.get(CONF_AI_TASK_ENTITY) or "").strip() or None
     return LLMConfig(
         provider=provider,
         api_key=api_key,
         base_url=base_url,
         model=model,
+        ai_task_entity=ai_task_entity,
     )
+
+
+def _slot_hhmm(name: str) -> str:
+    mins = slot_approx_minutes(MealSlotConfig(slot_id="tmp", name=name))
+    return f"{mins // 60:02d}:{mins % 60:02d}"
 
 
 def _build_person_profile(
@@ -140,7 +168,11 @@ def _build_person_profile(
     )
     slot_names = _split_csv(cfg.get(CONF_MEAL_SLOTS) or default_slots)
     meal_slots = [
-        MealSlotConfig(slot_id=slugify(name) or f"slot_{i}", name=name)
+        MealSlotConfig(
+            slot_id=slugify(name) or f"slot_{i}",
+            name=name,
+            approx_time=_slot_hhmm(name),
+        )
         for i, name in enumerate(slot_names)
     ]
 
@@ -152,6 +184,11 @@ def _build_person_profile(
             protein_g=float(cfg.get(CONF_MANUAL_PROTEIN_G, 150.0)),
             carbs_g=float(cfg.get(CONF_MANUAL_CARBS_G, 200.0)),
             fat_g=float(cfg.get(CONF_MANUAL_FAT_G, 65.0)),
+            fiber_g=(
+                float(cfg[CONF_MANUAL_FIBER_G])
+                if cfg.get(CONF_MANUAL_FIBER_G) is not None
+                else None
+            ),
             training_kcal=(
                 float(cfg[CONF_MANUAL_TRAINING_KCAL])
                 if cfg.get(CONF_MANUAL_TRAINING_KCAL) is not None
@@ -170,6 +207,11 @@ def _build_person_profile(
             training_fat_g=(
                 float(cfg[CONF_MANUAL_TRAINING_FAT_G])
                 if cfg.get(CONF_MANUAL_TRAINING_FAT_G) is not None
+                else None
+            ),
+            training_fiber_g=(
+                float(cfg[CONF_MANUAL_TRAINING_FIBER_G])
+                if cfg.get(CONF_MANUAL_TRAINING_FIBER_G) is not None
                 else None
             ),
         )
@@ -234,32 +276,51 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
     food_repo = FoodRepository(db)
     meal_repo = MealRepository(db)
     profile_repo = ProfileRepository(db)
+    preference_repo = PreferenceRepository(db)
+    plan_repo = MealPlanRepository(db)
+    preference_engine = PreferenceEngine(preference_repo, meal_repo)
     off_provider = OpenFoodFactsProvider(session)
     usda_provider = USDAProvider(session, api_key=None)
     resolver = FoodResolver(food_repo, off_provider=off_provider, usda_provider=usda_provider)
 
+    placeholder_logging = MealLoggingService(
+        meal_repo=meal_repo,
+        food_repo=food_repo,
+        resolver=resolver,
+        llm_client_getter=lambda _p: None,
+    )
+    placeholder_planner = MealPlannerService(
+        plan_repo=plan_repo,
+        meal_repo=meal_repo,
+        preference_engine=preference_engine,
+        resolver=resolver,
+        llm_client_getter=lambda _p: None,
+    )
+    placeholder_rebalancer = MealRebalancerService(
+        plan_repo=plan_repo,
+        meal_repo=meal_repo,
+        resolver=resolver,
+        planner_service=placeholder_planner,
+    )
+
     runtime = DomainRuntime(
+        hass=hass,
         db=db,
         food_repo=food_repo,
         meal_repo=meal_repo,
         profile_repo=profile_repo,
+        preference_repo=preference_repo,
+        plan_repo=plan_repo,
+        preference_engine=preference_engine,
         session=session,
         off_provider=off_provider,
         usda_provider=usda_provider,
         resolver=resolver,
-        logging_service=MealLoggingService(
-            meal_repo=meal_repo,
-            food_repo=food_repo,
-            resolver=resolver,
-            llm_client_getter=lambda _p: None,
-        ),
+        logging_service=placeholder_logging,
+        planner_service=placeholder_planner,
+        rebalancer_service=placeholder_rebalancer,
     )
-    runtime.logging_service = MealLoggingService(
-        meal_repo=meal_repo,
-        food_repo=food_repo,
-        resolver=resolver,
-        llm_client_getter=runtime.get_effective_llm_client,
-    )
+    runtime.update_usda_api_key(None)
 
     async def _on_ha_stop(_event: Event) -> None:
         await db.close()

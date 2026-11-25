@@ -39,7 +39,9 @@ class Database:
             return
 
         if self._db_path != ":memory:":
-            Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(
+                Path(self._db_path).parent.mkdir, parents=True, exist_ok=True
+            )
 
         conn = await aiosqlite.connect(self._db_path)
         conn.row_factory = aiosqlite.Row
@@ -107,7 +109,9 @@ class Database:
         applied_rows = await self.fetch_all("SELECT version FROM schema_migrations")
         applied_versions = {int(row["version"]) for row in applied_rows}
 
-        migration_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
+        migration_files = await asyncio.to_thread(
+            lambda: sorted(MIGRATIONS_DIR.glob("*.sql"))
+        )
         for migration_file in migration_files:
             version_str = migration_file.name.split("_", maxsplit=1)[0]
             if not version_str.isdigit():
@@ -116,7 +120,9 @@ class Database:
             if version in applied_versions:
                 continue
 
-            sql_script = migration_file.read_text(encoding="utf-8")
+            sql_script = await asyncio.to_thread(
+                migration_file.read_text, encoding="utf-8"
+            )
             async with self._write_lock:
                 try:
                     await conn.executescript(sql_script)

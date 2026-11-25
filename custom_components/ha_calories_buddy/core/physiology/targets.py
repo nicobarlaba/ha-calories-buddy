@@ -20,8 +20,16 @@ class TargetResult(BaseModel):
     protein_g: float
     carbs_g: float
     fat_g: float
+    fiber_g: float = 25.0
     mode: TargetMode
     safety_warnings: list[str] = Field(default_factory=list)
+
+
+def default_fiber_target_g(kcal: float) -> float:
+    """Compute evidence-based daily fiber target (14g per 1000 kcal, clamped 20-45g)."""
+    if kcal <= 0.0:
+        return 20.0
+    return round(min(45.0, max(20.0, (kcal / 1000.0) * 14.0)), 1)
 
 
 def calculate_daily_targets(
@@ -31,7 +39,7 @@ def calculate_daily_targets(
     tdee_result: TDEEResult,
     is_training_day: bool = False,
 ) -> TargetResult:
-    """Compute daily kcal and P/C/F targets for Physiology or Manual mode."""
+    """Compute daily kcal and P/C/F/Fiber targets for Physiology or Manual mode."""
     if profile.target_mode == TargetMode.MANUAL:
         return _manual_targets(profile, tdee_result, is_training_day)
 
@@ -55,6 +63,7 @@ def _manual_targets(
             protein_g=protein,
             carbs_g=carbs,
             fat_g=fat,
+            fiber_g=default_fiber_target_g(kcal),
             mode=TargetMode.MANUAL,
         )
 
@@ -75,17 +84,32 @@ def _manual_targets(
             if manual.training_fat_g is not None
             else manual.fat_g
         )
+        fiber = (
+            manual.training_fiber_g
+            if manual.training_fiber_g is not None
+            else (
+                manual.fiber_g
+                if manual.fiber_g is not None
+                else default_fiber_target_g(kcal)
+            )
+        )
     else:
         kcal = manual.kcal
         protein = manual.protein_g
         carbs = manual.carbs_g
         fat = manual.fat_g
+        fiber = (
+            manual.fiber_g
+            if manual.fiber_g is not None
+            else default_fiber_target_g(kcal)
+        )
 
     return TargetResult(
         target_kcal=round(kcal, 1),
         protein_g=round(protein, 1),
         carbs_g=round(carbs, 1),
         fat_g=round(fat, 1),
+        fiber_g=round(fiber, 1),
         mode=TargetMode.MANUAL,
     )
 
@@ -152,6 +176,7 @@ def _physiology_targets(
         protein_g=round(protein_g, 1),
         carbs_g=round(carbs_g, 1),
         fat_g=round(fat_g, 1),
+        fiber_g=default_fiber_target_g(raw_target),
         mode=TargetMode.PHYSIOLOGY,
         safety_warnings=warnings,
     )

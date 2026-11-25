@@ -42,6 +42,7 @@ def _slot_breakdown_attrs(state: PersonDashboardState) -> dict[str, Any]:
                 "protein_g": m.protein_g,
                 "carbs_g": m.carbs_g,
                 "fat_g": m.fat_g,
+                "fiber_g": m.fiber_g or 0.0,
             }
             for slot, m in state.totals.by_slot.items()
         },
@@ -115,6 +116,20 @@ SENSOR_DESCRIPTIONS: tuple[CaloriesBuddySensorDescription, ...] = (
         attrs_fn=lambda s: {
             "target_g": round(s.targets.fat_g, 1),
             "remaining_g": round(s.targets.fat_g - s.totals.consumed.fat_g, 1),
+        },
+    ),
+    CaloriesBuddySensorDescription(
+        key="fiber_consumed",
+        translation_key="fiber_consumed",
+        native_unit_of_measurement="g",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:barley",
+        value_fn=lambda s: round(s.totals.consumed.fiber_g or 0.0, 1),
+        attrs_fn=lambda s: {
+            "target_g": round(s.targets.fiber_g, 1),
+            "remaining_g": round(
+                s.targets.fiber_g - (s.totals.consumed.fiber_g or 0.0), 1
+            ),
         },
     ),
     CaloriesBuddySensorDescription(

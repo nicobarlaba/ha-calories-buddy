@@ -21,12 +21,31 @@ from custom_components.ha_calories_buddy.core.models import (
 from custom_components.ha_calories_buddy.core.storage.database import Database
 from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
 
+CATEGORY_GROUPS: dict[str, tuple[str, ...]] = {
+    "protein": ("poultry", "red_meat", "fish", "egg"),
+    "carbs": ("rice", "pasta", "grains", "oats", "bread", "potatoes"),
+    "legumes": ("legumes",),
+    "dairy": ("dairy",),
+    "produce": ("vegetables", "fruit"),
+    "fats": ("oil", "nuts"),
+    "other": ("snack", "beverage", "other"),
+}
+
 
 class FoodRepository:
     """Repository for global foods, portions, and per-person food overrides."""
 
     def __init__(self, db: Database) -> None:
         self._db = db
+
+    @staticmethod
+    def _expand_categories(category: str | None) -> tuple[str, ...]:
+        if not category:
+            return ()
+        key = category.strip().lower()
+        if not key or key == "all":
+            return ()
+        return CATEGORY_GROUPS.get(key, (key,))
 
     async def get_by_id(self, food_id: str) -> FoodItem | None:
         """Fetch a global food item by ID."""
@@ -98,6 +117,61 @@ class FoodRepository:
         )
         return await self._hydrate_rows(rows, person_id)
 
+    async def list_foods_paginated(
+        self,
+        person_id: str | None = None,
+        *,
+        query: str = "",
+        category: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        language: str = "en",
+    ) -> tuple[list[EffectiveFood], int]:
+        """Search or browse the Global Vault with deterministic pagination and category filtering."""
+        safe_limit = max(1, min(100, int(limit)))
+        safe_offset = max(0, int(offset))
+        categories = self._expand_categories(category)
+        norm_q = normalize_text(query)
+
+        if not norm_q:
+            where_sql = ""
+            params: list[str | int] = []
+            if categories:
+                placeholders = ",".join("?" for _ in categories)
+                where_sql = f"WHERE LOWER(category) IN ({placeholders})"
+                params.extend(categories)
+
+            count_row = await self._db.fetch_one(
+                f"SELECT COUNT(*) AS cnt FROM global_foods {where_sql}",
+                tuple(params),
+            )
+            total = int(count_row["cnt"]) if count_row is not None else 0
+            order_col = (
+                "COALESCE(name_it, name)" if language == "it" else "name"
+            )
+            rows = await self._db.fetch_all(
+                f"""
+                SELECT * FROM global_foods
+                {where_sql}
+                ORDER BY verified DESC, {order_col} ASC
+                LIMIT ? OFFSET ?
+                """,
+                tuple([*params, safe_limit, safe_offset]),
+            )
+            items = await self._hydrate_rows(rows, person_id)
+            return items, total
+
+        matches = await self.search(
+            query,
+            person_id=person_id,
+            limit=200,
+        )
+        if categories:
+            cat_set = set(categories)
+            matches = [m for m in matches if m.category.lower() in cat_set]
+        total = len(matches)
+        return matches[safe_offset : safe_offset + safe_limit], total
+
     async def search(
         self,
         query: str,
@@ -119,10 +193,11 @@ class FoodRepository:
             pattern = f"%{tok}%"
             like_clauses.append(
                 "(gf.normalized_name LIKE ? OR gf.aliases_text LIKE ? OR "
+                "LOWER(COALESCE(gf.name_it, '')) LIKE ? OR "
                 "COALESCE(gf.normalized_brand, '') LIKE ? OR "
                 "COALESCE(pfo.preferred_alias, '') LIKE ?)"
             )
-            params.extend([pattern, pattern, pattern, pattern])
+            params.extend([pattern, pattern, pattern, pattern, pattern])
 
         where_sql = " AND ".join(like_clauses)
         if person_id:
@@ -224,15 +299,16 @@ class FoodRepository:
             await conn.execute(
                 """
                 INSERT INTO global_foods (
-                    food_id, name, normalized_name, aliases_text,
+                    food_id, name, name_it, normalized_name, aliases_text,
                     brand, normalized_brand, barcode_ean, category,
                     preparation_state, kcal_per_100g, protein_per_100g,
                     carbs_per_100g, fat_per_100g, fiber_per_100g,
                     label_standard, yield_factor, source, verified,
                     atwater_warning, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(food_id) DO UPDATE SET
                     name = excluded.name,
+                    name_it = COALESCE(excluded.name_it, global_foods.name_it),
                     normalized_name = excluded.normalized_name,
                     aliases_text = CASE
                         WHEN excluded.aliases_text = '' THEN global_foods.aliases_text
@@ -258,6 +334,7 @@ class FoodRepository:
                 (
                     food.food_id,
                     food.name,
+                    food.name_it,
                     norm_name,
                     aliases_text,
                     food.brand,
@@ -420,9 +497,12 @@ class FoodRepository:
     def _row_to_food(row: aiosqlite.Row, portions: list[FoodPortion]) -> FoodItem:
         aliases_raw = row["aliases_text"] or ""
         aliases = [a for a in aliases_raw.split("|") if a]
+        row_keys = row.keys()
+        name_it = row["name_it"] if "name_it" in row_keys else None
         return FoodItem(
             food_id=row["food_id"],
             name=row["name"],
+            name_it=name_it,
             normalized_name=row["normalized_name"],
             aliases=aliases,
             brand=row["brand"],
@@ -498,6 +578,7 @@ class FoodRepository:
             return EffectiveFood(
                 food_id=food.food_id,
                 name=food.name,
+                name_it=food.name_it,
                 normalized_name=food.normalized_name,
                 aliases=food.aliases,
                 brand=food.brand,
@@ -545,6 +626,7 @@ class FoodRepository:
         return EffectiveFood(
             food_id=food.food_id,
             name=food.name,
+            name_it=food.name_it,
             normalized_name=food.normalized_name,
             aliases=food.aliases,
             preferred_alias=override.preferred_alias,
@@ -580,6 +662,8 @@ class FoodRepository:
         if not norm_q:
             return 0.0
         names_to_check = [candidate.normalized_name, *candidate.aliases]
+        if candidate.name_it:
+            names_to_check.append(normalize_text(candidate.name_it))
         if candidate.preferred_alias:
             names_to_check.append(normalize_text(candidate.preferred_alias))
         if any(n == norm_q for n in names_to_check):
@@ -613,10 +697,12 @@ class FoodRepository:
             score += 15.0
         if candidate.verified:
             score += 10.0
-        if (
-            preferred_state
-            and preferred_state != PreparationState.UNSPECIFIED
-            and candidate.preparation_state == preferred_state
-        ):
-            score += 18.0
+        if preferred_state and preferred_state != PreparationState.UNSPECIFIED:
+            if candidate.preparation_state == preferred_state:
+                score += 28.0
+            elif {
+                candidate.preparation_state,
+                preferred_state,
+            } == {PreparationState.RAW, PreparationState.COOKED}:
+                score -= 12.0
         return score

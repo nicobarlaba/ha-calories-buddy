@@ -1,14 +1,39 @@
-/** Today View: Calorie ring, macro bars, pending confirmations, meal list, weight log */
+/** Today View: Calorie ring, macro bars, SVG macro distribution pie chart, planned today, meal diary */
 import { renderQuickLogBar } from "../components/quick-log-bar.js";
 import { t } from "../i18n/index.js";
-import { escapeHtml, round1 } from "../utils.js";
+import { computeMacroPieSlices, escapeHtml, parseJsonSafe, round1 } from "../utils.js";
+
+function renderMacroPieSvg(pieData) {
+  const r = 34;
+  const c = 2 * Math.PI * r;
+  if (pieData.totalKcal <= 0) {
+    return `
+      <svg width="88" height="88" viewBox="0 0 88 88">
+        <circle cx="44" cy="44" r="${r}" fill="none" stroke="var(--secondary-background-color, rgba(127,127,127,0.22))" stroke-width="14" />
+      </svg>
+    `;
+  }
+  let offset = 0;
+  const circles = pieData.slices
+    .filter((s) => s.exactShare > 0.005)
+    .map((s) => {
+      const len = s.exactShare * c;
+      const el = `<circle cx="44" cy="44" r="${r}" fill="none" stroke="${s.color}" stroke-width="14" stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 44 44)" />`;
+      offset += len;
+      return el;
+    })
+    .join("");
+  return `<svg width="88" height="88" viewBox="0 0 88 88">${circles}</svg>`;
+}
 
 export function renderTodayView(container, dashboard, uiState, callbacks) {
   const lang = uiState.language;
-  const targets = dashboard.targets || { target_kcal: 2000, protein_g: 150, carbs_g: 200, fat_g: 65, safety_warnings: [] };
-  const totals = dashboard.totals?.consumed || { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
+  const targets = dashboard.targets || { target_kcal: 2000, protein_g: 150, carbs_g: 200, fat_g: 65, fiber_g: 28, safety_warnings: [] };
+  const totals = dashboard.totals?.consumed || { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
   const tdee = dashboard.tdee || { tdee_kcal: 2200, engine_used: "static" };
   const meals = dashboard.meals || [];
+  const slots = dashboard.person?.meal_slots || [];
+  const plannedToday = (dashboard.planned_today || []).filter((p) => p.status === "planned");
 
   const targetKcal = Math.max(1, Number(targets.target_kcal || 1));
   const consumedKcal = Number(totals.kcal || 0);
@@ -19,6 +44,18 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference - (pct / 100) * circumference;
   const ringColor = remainingKcal < 0 ? "var(--error-color, #db4437)" : "var(--primary-color, #03a9f4)";
+
+  const pieMode = uiState.macroPieMode || (consumedKcal > 0 ? "consumed" : "target");
+  const pieSource =
+    pieMode === "target"
+      ? {
+          protein_g: targets.protein_g,
+          carbs_g: targets.carbs_g,
+          fat_g: targets.fat_g,
+          fiber_g: targets.fiber_g || 0,
+        }
+      : totals;
+  const pieData = computeMacroPieSlices(pieSource);
 
   const pendingMeals = meals.filter((m) => m.status === "pending_confirmation");
   const confirmedMeals = meals.filter((m) => m.status === "confirmed");
@@ -35,6 +72,22 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
           <div class="bar-fill" style="width:${p}%; background:${color};"></div>
         </div>
       </div>
+    `;
+  };
+
+  const renderSlotSelect = (meal) => {
+    const slotNames = slots.map((s) => s.name);
+    const hasCurrent = slotNames.includes(meal.meal_slot);
+    return `
+      <select class="slot-inline-select meal-slot-select" data-log-id="${escapeHtml(meal.log_id)}">
+        ${!hasCurrent ? `<option value="${escapeHtml(meal.meal_slot)}" selected>${escapeHtml(meal.meal_slot)}</option>` : ""}
+        ${slotNames
+          .map(
+            (name) =>
+              `<option value="${escapeHtml(name)}" ${meal.meal_slot === name ? "selected" : ""}>${escapeHtml(name)}</option>`
+          )
+          .join("")}
+      </select>
     `;
   };
 
@@ -74,7 +127,7 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
               ${warnBadge}
               <div class="meal-item-meta">
                 ${item.input_quantity} ${escapeHtml(item.input_unit)} (${escapeHtml(t(lang, `state_${item.input_state}`) || item.input_state)})
-                · ${Math.round(item.macros.kcal)} kcal (P ${round1(item.macros.protein_g)} / C ${round1(item.macros.carbs_g)} / F ${round1(item.macros.fat_g)})
+                · ${Math.round(item.macros.kcal)} kcal (P ${round1(item.macros.protein_g)} / C ${round1(item.macros.carbs_g)} / F ${round1(item.macros.fat_g)} / Fib ${round1(item.macros.fiber_g || 0)})
               </div>
             </div>
             <button type="button" class="secondary start-edit-btn" data-item-id="${escapeHtml(item.item_id)}">${escapeHtml(t(lang, "edit_btn"))}</button>
@@ -88,7 +141,10 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
     return `
       <div class="meal-card ${isPending ? "pending" : ""}">
         <div class="meal-header">
-          <span>${isPending ? "⚠️" : "🍽️"} ${escapeHtml(meal.meal_slot)}</span>
+          <span class="controls-row">
+            <span>${isPending ? "⚠️" : "🍽️"}</span>
+            ${renderSlotSelect(meal)}
+          </span>
           <span>${Math.round(meal.total_macros.kcal)} kcal</span>
         </div>
         ${itemsHtml}
@@ -129,6 +185,32 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
         ${renderMacroBar(t(lang, "protein"), totals.protein_g, targets.protein_g, "#42a5f5")}
         ${renderMacroBar(t(lang, "carbs"), totals.carbs_g, targets.carbs_g, "#ffa726")}
         ${renderMacroBar(t(lang, "fat"), totals.fat_g, targets.fat_g, "#ab47bc")}
+        ${renderMacroBar(t(lang, "fiber"), totals.fiber_g || 0, targets.fiber_g || 28, "#66bb6a")}
+      </div>
+    </div>
+
+    <div class="macro-pie-card">
+      <div class="macro-pie-left">
+        ${renderMacroPieSvg(pieData)}
+        <div>
+          <div style="font-size: 0.82rem; font-weight: 600; margin-bottom: 6px;">${escapeHtml(t(lang, "macro_split_title"))}</div>
+          <div class="macro-legend">
+            ${pieData.slices
+              .map(
+                (s) => `
+              <div class="legend-item">
+                <span class="legend-dot" style="background:${s.color};"></span>
+                <span>${escapeHtml(t(lang, s.key))}: <strong>${s.pct}%</strong> (${round1(s.grams)}g)</span>
+              </div>
+            `
+              )
+              .join("")}
+          </div>
+        </div>
+      </div>
+      <div class="controls-row">
+        <button type="button" class="chip-btn pie-mode-btn ${pieMode === "consumed" ? "active" : ""}" data-mode="consumed">${escapeHtml(t(lang, "consumed"))}</button>
+        <button type="button" class="chip-btn pie-mode-btn ${pieMode === "target" ? "active" : ""}" data-mode="target">${escapeHtml(t(lang, "target"))}</button>
       </div>
     </div>
 
@@ -149,6 +231,36 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
         : ""
     }
 
+    ${
+      plannedToday.length
+        ? `<div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
+             <span>📋 ${escapeHtml(t(lang, "planned_today_title"))}</span>
+             <button type="button" class="chip-btn" id="today-rebalance-btn">⚖️ ${escapeHtml(t(lang, "rebalance_today_btn"))}</button>
+           </div>
+           ${plannedToday
+             .map((p) => {
+               const ings = parseJsonSafe(p.ingredients_json, []);
+               const preview = ings.slice(0, 3).map((i) => `${i.name} ${Math.round(i.grams)}g`).join(" · ");
+               return `
+                 <div class="meal-card planned">
+                   <div class="meal-header">
+                     <span>📋 [${escapeHtml(p.meal_slot)}] ${escapeHtml(p.title)}</span>
+                     <span>${Math.round(p.macros.kcal)} kcal</span>
+                   </div>
+                   <div class="meal-item-meta">${escapeHtml(preview)} · P ${round1(p.macros.protein_g)}g C ${round1(p.macros.carbs_g)}g F ${round1(p.macros.fat_g)}g</div>
+                   <div class="meal-actions">
+                     <button type="button" class="success today-promote-btn" data-plan-item-id="${escapeHtml(p.plan_item_id)}" data-scale="1.0">${escapeHtml(t(lang, "log_as_eaten_btn"))}</button>
+                     <button type="button" class="secondary today-promote-btn" data-plan-item-id="${escapeHtml(p.plan_item_id)}" data-scale="0.75">0.75×</button>
+                     <button type="button" class="secondary today-promote-btn" data-plan-item-id="${escapeHtml(p.plan_item_id)}" data-scale="1.25">1.25×</button>
+                     <button type="button" class="secondary today-swap-btn" data-plan-item-id="${escapeHtml(p.plan_item_id)}">${escapeHtml(t(lang, "swap_btn"))}</button>
+                   </div>
+                 </div>
+               `;
+             })
+             .join("")}`
+        : ""
+    }
+
     <div class="section-title">${escapeHtml(t(lang, "todays_meals"))}</div>
     ${confirmedMeals.length ? confirmedMeals.map((m) => renderMealCard(m, false)).join("") : `<div class="hint-text">${escapeHtml(t(lang, "no_meals_today"))}</div>`}
 
@@ -164,17 +276,54 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
     {
       language: lang,
       llmEnabled: Boolean(dashboard.llm_enabled),
-      mealSlots: dashboard.person?.meal_slots || [],
+      mealSlots: slots,
       personId: dashboard.person?.person_id,
       busy: uiState.busy,
+      selectedAiSlot: uiState.selectedAiSlot || null,
     },
     {
       api: callbacks.api,
       onLogText: callbacks.onLogText,
       onLogItem: callbacks.onLogItem,
       onOpenBarcode: callbacks.onOpenBarcode,
+      onSelectAiSlot: callbacks.onSelectAiSlot,
     }
   );
+
+  container.querySelectorAll(".pie-mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      callbacks.onSetMacroPieMode?.(btn.getAttribute("data-mode"));
+    });
+  });
+
+  container.querySelectorAll(".meal-slot-select").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const logId = sel.getAttribute("data-log-id");
+      const newSlot = sel.value;
+      if (logId && newSlot) {
+        callbacks.onUpdateMealSlot?.(logId, newSlot);
+      }
+    });
+  });
+
+  container.querySelectorAll(".today-promote-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const itemId = btn.getAttribute("data-plan-item-id");
+      const scale = Number(btn.getAttribute("data-scale") || 1.0);
+      callbacks.onPromotePlanMeal?.(itemId, scale);
+    });
+  });
+
+  container.querySelectorAll(".today-swap-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const itemId = btn.getAttribute("data-plan-item-id");
+      callbacks.onSwapPlanMeal?.(itemId, "");
+    });
+  });
+
+  container.querySelector("#today-rebalance-btn")?.addEventListener("click", () => {
+    callbacks.onRebalanceToday?.({});
+  });
 
   container.querySelectorAll(".confirm-meal-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
