@@ -39,7 +39,9 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
   const tdee = dashboard.tdee || { tdee_kcal: 2200, engine_used: "static" };
   const meals = dashboard.meals || [];
   const slots = dashboard.person?.meal_slots || [];
-  const plannedToday = (dashboard.planned_today || []).filter((p) => p.status === "planned");
+  const plannedToday = (dashboard.planned_today || []).filter(
+    (p) => p.status === "planned" && !p.covered_by_log
+  );
 
   const targetKcal = Math.max(1, Number(targets.target_kcal || 1));
   const consumedKcal = Number(totals.kcal || 0);

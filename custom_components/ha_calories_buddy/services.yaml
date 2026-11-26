@@ -453,3 +453,88 @@ set_preference:
       name: Person (optional)
       selector:
         text:
+
+save_recipe:
+  name: Save Homemade Recipe
+  description: Create or update a homemade composite recipe and sync it to the Global Food Vault.
+  fields:
+    name:
+      name: Recipe Name
+      required: true
+      selector:
+        text:
+    ingredients:
+      name: Ingredients List
+      description: List of ingredient objects with name, quantity, unit, state, and optional food_id.
+      required: true
+      selector:
+        object:
+    servings:
+      name: Servings / Portions
+      default: 1.0
+      selector:
+        number:
+          min: 0.25
+          max: 100
+          step: 0.25
+    serving_unit:
+      name: Serving Unit
+      default: serving
+      selector:
+        select:
+          options:
+            - serving
+            - slice
+            - piece
+    final_weight_g:
+      name: Final Cooked Weight (g, optional)
+      selector:
+        number:
+          min: 1
+          max: 20000
+          step: 1
+          unit_of_measurement: g
+    category:
+      name: Category
+      default: other
+      selector:
+        select:
+          options:
+            - other
+            - snack
+            - protein
+            - carbs
+            - dairy
+            - legumes
+            - produce
+    allow_in_planner:
+      name: Allow in AI Meal Planner
+      default: false
+      selector:
+        boolean:
+    notes:
+      name: Notes (optional)
+      selector:
+        text:
+    recipe_id:
+      name: Existing Recipe ID (to update)
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+delete_recipe:
+  name: Delete Homemade Recipe
+  description: Delete a homemade recipe and its linked Vault food entry while preserving logged meal snapshots.
+  fields:
+    recipe_id:
+      name: Recipe ID
+      required: true
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:

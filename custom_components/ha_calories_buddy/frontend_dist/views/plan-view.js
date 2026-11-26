@@ -274,13 +274,21 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
           .map((item, idx) => {
             const ings = parseJsonSafe(item.ingredients_json, []);
             const isConsumed = item.status === "consumed";
+            const isCovered = item.status === "planned" && Boolean(item.covered_by_log);
+            const isInactive = isConsumed || isCovered;
             const isSwapping = planState.swappingItemId === item.plan_item_id;
+            const statusIcon = isConsumed ? "✅" : isCovered ? "🔄" : "📋";
+            const statusBadge = isConsumed
+              ? `<span class="pill good">${escapeHtml(t(lang, "consumed_badge"))}</span>`
+              : isCovered
+                ? `<span class="pill">${escapeHtml(t(lang, "replaced_by_log_badge"))}</span>`
+                : "";
             return `
-              <div class="meal-card ${isConsumed ? "" : "planned"}">
+              <div class="meal-card ${isCovered ? "covered" : isConsumed ? "" : "planned"}">
                 <div class="meal-header">
                   <span>
-                    ${isConsumed ? "✅" : "📋"} [${escapeHtml(item.meal_slot)}] ${escapeHtml(item.title)}
-                    ${isConsumed ? `<span class="pill good">${escapeHtml(t(lang, "consumed_badge"))}</span>` : ""}
+                    ${statusIcon} [${escapeHtml(item.meal_slot)}] ${escapeHtml(item.title)}
+                    ${statusBadge}
                     ${item.macro_fit_warning ? `<span class="pill warn">⚠️ ${escapeHtml(t(lang, "fit_warning_badge"))}</span>` : ""}
                   </span>
                   <span>${Math.round(item.macros.kcal)} kcal</span>
@@ -303,8 +311,8 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
                     : `
                   <div class="meal-actions">
                     <button type="button" class="secondary view-plan-recipe-btn" data-idx="${idx}">${escapeHtml(t(lang, "recipe_btn"))}</button>
-                    ${!isConsumed ? `<button type="button" class="success promote-plan-btn" data-id="${escapeHtml(item.plan_item_id)}">${escapeHtml(t(lang, "log_as_eaten_btn"))}</button>` : ""}
-                    ${!isConsumed && llmEnabled ? `<button type="button" class="secondary start-swap-btn" data-id="${escapeHtml(item.plan_item_id)}">${escapeHtml(t(lang, "swap_btn"))}</button>` : ""}
+                    ${!isInactive ? `<button type="button" class="success promote-plan-btn" data-id="${escapeHtml(item.plan_item_id)}">${escapeHtml(t(lang, "log_as_eaten_btn"))}</button>` : ""}
+                    ${!isInactive && llmEnabled ? `<button type="button" class="secondary start-swap-btn" data-id="${escapeHtml(item.plan_item_id)}">${escapeHtml(t(lang, "swap_btn"))}</button>` : ""}
                     <button type="button" class="chip-btn fb-btn" data-title="${escapeHtml(item.title)}" data-rating="like">👍</button>
                     <button type="button" class="chip-btn fb-btn" data-title="${escapeHtml(item.title)}" data-rating="dislike">👎</button>
                     <button type="button" class="chip-btn fb-btn" data-title="${escapeHtml(item.title)}" data-rating="never_suggest">🚫</button>

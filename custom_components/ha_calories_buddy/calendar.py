@@ -281,8 +281,11 @@ class CaloriesBuddyCalendarEntity(
         events: list[CalendarEvent] = []
         by_day: dict[date, list[MealLog]] = {}
         confirmed_by_slot: dict[tuple[date, str], list[MealLog]] = {}
+        logged_slot_keys: set[tuple[date, str]] = set()
         for meal in meals:
             by_day.setdefault(meal.log_date, []).append(meal)
+            if meal.status != MealStatus.DELETED:
+                logged_slot_keys.add((meal.log_date, normalize_text(meal.meal_slot)))
             if meal.status == MealStatus.PENDING_CONFIRMATION:
                 events.append(
                     _meal_to_calendar_event(meal, profile.meal_slots, profile.language)
@@ -315,6 +318,8 @@ class CaloriesBuddyCalendarEntity(
             )
 
         for plan_date, plan_item in planned_items:
+            if (plan_date, normalize_text(plan_item.meal_slot)) in logged_slot_keys:
+                continue
             events.append(
                 _planned_to_calendar_event(
                     plan_date, plan_item, profile.meal_slots, profile.language

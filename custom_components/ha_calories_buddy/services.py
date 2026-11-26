@@ -36,6 +36,9 @@ from custom_components.ha_calories_buddy.core.models import (
     PreferenceStance,
     PreparationState,
 )
+from custom_components.ha_calories_buddy.core.nutrition.recipes import (
+    parse_recipe_ingredient_inputs,
+)
 from custom_components.ha_calories_buddy.core.physiology.targets import TargetResult
 from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
     compute_smart_slot_budget,
@@ -364,6 +367,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                 start_date=start_d,
                 daily_targets=targets,
                 options=options,
+                reference_today=dt_util.now().date(),
             )
         except Exception as exc:
             raise HomeAssistantError(str(exc)) from exc
@@ -444,6 +448,42 @@ def async_register_services(hass: HomeAssistant) -> None:
             notes=str(call.data.get("notes") or ""),
         )
         return {"preference": pref.model_dump(mode="json")}
+
+    async def handle_save_recipe(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        try:
+            ing_inputs = parse_recipe_ingredient_inputs(list(call.data["ingredients"]))
+            recipe = await runtime.recipe_service.save_recipe(
+                profile,
+                recipe_id=call.data.get("recipe_id") or None,
+                name=str(call.data["name"]),
+                ingredients=ing_inputs,
+                servings=float(call.data.get("servings", 1.0)),
+                serving_unit=str(call.data.get("serving_unit") or "serving"),
+                final_weight_g=(
+                    float(call.data["final_weight_g"])
+                    if call.data.get("final_weight_g") is not None
+                    else None
+                ),
+                category=str(call.data.get("category") or "other"),
+                allow_in_planner=bool(call.data.get("allow_in_planner", False)),
+                notes=str(call.data.get("notes") or ""),
+            )
+        except Exception as exc:
+            raise HomeAssistantError(str(exc)) from exc
+        await _refresh_person(hass, profile.person_id)
+        return {"recipe": recipe.model_dump(mode="json")}
+
+    async def handle_delete_recipe(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        deleted = await runtime.recipe_service.delete_recipe(
+            str(call.data["recipe_id"])
+        )
+        if deleted:
+            await _refresh_person(hass, profile.person_id)
+        return {"deleted": deleted}
 
     hass.services.async_register(
         DOMAIN,
@@ -671,6 +711,38 @@ def async_register_services(hass: HomeAssistant) -> None:
                 vol.Required("target_value"): cv.string,
                 vol.Required("stance"): cv.string,
                 vol.Optional("notes"): cv.string,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "save_recipe",
+        handle_save_recipe,
+        schema=vol.Schema(
+            {
+                vol.Required("name"): cv.string,
+                vol.Required("ingredients"): list,
+                vol.Optional("servings", default=1.0): vol.Coerce(float),
+                vol.Optional("serving_unit", default="serving"): cv.string,
+                vol.Optional("final_weight_g"): vol.Coerce(float),
+                vol.Optional("category", default="other"): cv.string,
+                vol.Optional("allow_in_planner", default=False): cv.boolean,
+                vol.Optional("notes", default=""): cv.string,
+                vol.Optional("recipe_id"): cv.string,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "delete_recipe",
+        handle_delete_recipe,
+        schema=vol.Schema(
+            {
+                vol.Required("recipe_id"): cv.string,
                 vol.Optional(ATTR_PERSON): cv.string,
             }
         ),

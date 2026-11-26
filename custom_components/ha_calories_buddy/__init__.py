@@ -95,6 +95,7 @@ from custom_components.ha_calories_buddy.core.nutrition.providers.open_food_fact
     OpenFoodFactsProvider,
 )
 from custom_components.ha_calories_buddy.core.nutrition.providers.usda import USDAProvider
+from custom_components.ha_calories_buddy.core.nutrition.recipes import RecipeService
 from custom_components.ha_calories_buddy.core.nutrition.resolver import FoodResolver
 from custom_components.ha_calories_buddy.core.planner.meal_parser import (
     MealLoggingService,
@@ -121,6 +122,7 @@ from custom_components.ha_calories_buddy.core.storage.preference_repo import (
     PreferenceRepository,
 )
 from custom_components.ha_calories_buddy.core.storage.profile_repo import ProfileRepository
+from custom_components.ha_calories_buddy.core.storage.recipe_repo import RecipeRepository
 from custom_components.ha_calories_buddy.core.storage.seeder import seed_database_if_empty
 from custom_components.ha_calories_buddy.frontend import async_register_frontend
 from custom_components.ha_calories_buddy.llm_api import async_register_llm_api
@@ -301,6 +303,7 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
         profile_repo = ProfileRepository(db)
         preference_repo = PreferenceRepository(db)
         plan_repo = MealPlanRepository(db)
+        recipe_repo = RecipeRepository(db)
         preference_engine = PreferenceEngine(preference_repo, meal_repo)
         off_provider = OpenFoodFactsProvider(session)
         usda_provider = USDAProvider(session, api_key=None)
@@ -318,12 +321,19 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
             preference_engine=preference_engine,
             resolver=resolver,
             llm_client_getter=lambda _p: None,
+            recipe_repo=recipe_repo,
         )
         placeholder_rebalancer = MealRebalancerService(
             plan_repo=plan_repo,
             meal_repo=meal_repo,
             resolver=resolver,
             planner_service=placeholder_planner,
+        )
+        placeholder_recipes = RecipeService(
+            recipe_repo=recipe_repo,
+            food_repo=food_repo,
+            resolver=resolver,
+            llm_client_getter=lambda _p: None,
         )
 
         runtime = DomainRuntime(
@@ -334,6 +344,7 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
             profile_repo=profile_repo,
             preference_repo=preference_repo,
             plan_repo=plan_repo,
+            recipe_repo=recipe_repo,
             preference_engine=preference_engine,
             session=session,
             off_provider=off_provider,
@@ -342,6 +353,7 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
             logging_service=placeholder_logging,
             planner_service=placeholder_planner,
             rebalancer_service=placeholder_rebalancer,
+            recipe_service=placeholder_recipes,
         )
         runtime.update_usda_api_key(None)
 

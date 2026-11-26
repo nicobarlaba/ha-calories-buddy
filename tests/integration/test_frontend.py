@@ -31,6 +31,7 @@ def test_frontend_bundle_files_and_exports_exist() -> None:
         "components/barcode-scanner.js",
         "views/today-view.js",
         "views/vault-view.js",
+        "views/recipes-subview.js",
     ]
     for rel in expected_files:
         path = Path(FRONTEND_DIR) / rel

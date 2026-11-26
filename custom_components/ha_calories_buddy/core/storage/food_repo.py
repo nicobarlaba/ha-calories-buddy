@@ -287,7 +287,9 @@ class FoodRepository:
             return None
         return best
 
-    async def upsert_global_food(self, food: FoodItem) -> FoodItem:
+    async def upsert_global_food(
+        self, food: FoodItem, *, replace_portions: bool = False
+    ) -> FoodItem:
         """Insert or update a food item and its standard portions in the Global Vault."""
         now = datetime.now(UTC).isoformat()
         norm_name = normalize_text(food.name)
@@ -356,6 +358,12 @@ class FoodRepository:
                 ),
             )
 
+            if replace_portions:
+                await conn.execute(
+                    "DELETE FROM food_portions WHERE food_id = ?",
+                    (food.food_id,),
+                )
+
             for portion in food.portions:
                 await conn.execute(
                     """
@@ -376,6 +384,15 @@ class FoodRepository:
 
         saved = await self.get_by_id(food.food_id)
         return saved or food
+
+    async def delete_global_food(self, food_id: str) -> bool:
+        """Delete a food from the Global Vault (historical meal logs keep snapshots via ON DELETE SET NULL)."""
+        async with self._db.transaction() as conn:
+            cursor = await conn.execute(
+                "DELETE FROM global_foods WHERE food_id = ?",
+                (food_id,),
+            )
+            return cursor.rowcount > 0
 
     async def upsert_person_override(
         self, override: PersonFoodOverride

@@ -21,6 +21,7 @@ from custom_components.ha_calories_buddy.core.nutrition.providers.open_food_fact
     OpenFoodFactsProvider,
 )
 from custom_components.ha_calories_buddy.core.nutrition.providers.usda import USDAProvider
+from custom_components.ha_calories_buddy.core.nutrition.recipes import RecipeService
 from custom_components.ha_calories_buddy.core.nutrition.resolver import FoodResolver
 from custom_components.ha_calories_buddy.core.planner.meal_parser import (
     MealLoggingService,
@@ -44,6 +45,7 @@ from custom_components.ha_calories_buddy.core.storage.preference_repo import (
     PreferenceRepository,
 )
 from custom_components.ha_calories_buddy.core.storage.profile_repo import ProfileRepository
+from custom_components.ha_calories_buddy.core.storage.recipe_repo import RecipeRepository
 from custom_components.ha_calories_buddy.ha_llm_client import HAAITaskLLMClient
 
 if TYPE_CHECKING:
@@ -85,6 +87,7 @@ class DomainRuntime:
     profile_repo: ProfileRepository
     preference_repo: PreferenceRepository
     plan_repo: MealPlanRepository
+    recipe_repo: RecipeRepository
     preference_engine: PreferenceEngine
     session: aiohttp.ClientSession
     off_provider: OpenFoodFactsProvider
@@ -93,6 +96,7 @@ class DomainRuntime:
     logging_service: MealLoggingService
     planner_service: MealPlannerService
     rebalancer_service: MealRebalancerService
+    recipe_service: RecipeService
     hub: HubRuntimeData | None = None
     persons: dict[str, PersonRuntimeData] = field(default_factory=dict)
     frontend_registered: bool = False
@@ -156,10 +160,17 @@ class DomainRuntime:
             preference_engine=self.preference_engine,
             resolver=self.resolver,
             llm_client_getter=self.get_effective_llm_client,
+            recipe_repo=self.recipe_repo,
         )
         self.rebalancer_service = MealRebalancerService(
             plan_repo=self.plan_repo,
             meal_repo=self.meal_repo,
             resolver=self.resolver,
             planner_service=self.planner_service,
+        )
+        self.recipe_service = RecipeService(
+            recipe_repo=self.recipe_repo,
+            food_repo=self.food_repo,
+            resolver=self.resolver,
+            llm_client_getter=self.get_effective_llm_client,
         )

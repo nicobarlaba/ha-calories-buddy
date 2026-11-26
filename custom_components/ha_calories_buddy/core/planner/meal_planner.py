@@ -23,6 +23,7 @@ from custom_components.ha_calories_buddy.core.llm.prompts.meal_plan import (
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
     EffectiveFood,
+    FoodSource,
     IngredientRole,
     Macros,
     MealLog,
@@ -64,12 +65,16 @@ from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     canonical_slot_group,
     default_slots_for_language,
     effective_slot_group,
+    extract_logged_slot_keys,
     is_sweet_default_slot_group,
     resolve_meal_slot,
 )
 from custom_components.ha_calories_buddy.core.storage.meal_repo import MealRepository
 from custom_components.ha_calories_buddy.core.storage.plan_repo import (
     MealPlanRepository,
+)
+from custom_components.ha_calories_buddy.core.storage.recipe_repo import (
+    RecipeRepository,
 )
 from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
 
@@ -167,12 +172,14 @@ class MealPlannerService:
         preference_engine: PreferenceEngine,
         resolver: FoodResolver,
         llm_client_getter: Callable[[PersonProfile], LLMClient | None],
+        recipe_repo: RecipeRepository | None = None,
     ) -> None:
         self._plan_repo = plan_repo
         self._meal_repo = meal_repo
         self._pref_engine = preference_engine
         self._resolver = resolver
         self._get_llm = llm_client_getter
+        self._recipe_repo = recipe_repo
 
     async def suggest_meal(
         self,
@@ -321,6 +328,7 @@ class MealPlannerService:
         start_date: date,
         daily_targets: TargetResult,
         options: PlanGenerationOptions,
+        reference_today: date | None = None,
     ) -> MealPlan:
         """Generate a 1-7 day meal plan day-by-day with safety & <=5% macro scaling."""
         llm_client = self._require_llm(profile)
@@ -329,6 +337,7 @@ class MealPlannerService:
         ctx = await self._pref_engine.build_context(profile, reference_date=start_date)
         vault_hint = await self._build_vault_catalog_hint(profile)
         resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] = {}
+        today_date = reference_today or date.today()
 
         day_target_macros = Macros(
             kcal=daily_targets.target_kcal,
@@ -347,13 +356,85 @@ class MealPlannerService:
             cur_date = start_date + timedelta(days=offset)
             plan_day_id = f"day_{uuid.uuid4().hex[:12]}"
 
-            # Meal-prep reuse on alternate days when requested
-            if options.meal_prep_mode and prev_day_skeletons is not None and offset % 2 == 1:
+            day_slots = slots
+            day_slot_targets = slot_targets
+            day_scale_target = day_target_macros
+            is_partial_today = False
+
+            if cur_date == today_date:
+                today_meals = await self._meal_repo.list_meals_for_date(
+                    profile.person_id, cur_date
+                )
+                logged_slots = extract_logged_slot_keys(today_meals)
+                if logged_slots:
+                    uncovered_slots = [
+                        s for s in slots if normalize_text(s.name) not in logged_slots
+                    ]
+                    if not uncovered_slots:
+                        days.append(
+                            MealPlanDay(
+                                plan_day_id=plan_day_id,
+                                plan_id=plan_id,
+                                plan_date=cur_date,
+                                target_macros=day_target_macros,
+                                items=[],
+                            )
+                        )
+                        prev_day_skeletons = None
+                        continue
+                    if len(uncovered_slots) < len(slots):
+                        is_partial_today = True
+                        totals = await self._meal_repo.get_daily_totals(
+                            profile.person_id, cur_date
+                        )
+                        rem_targets = daily_targets.model_copy(
+                            update={
+                                "target_kcal": round(
+                                    max(150.0, daily_targets.target_kcal - totals.consumed.kcal),
+                                    1,
+                                ),
+                                "protein_g": round(
+                                    max(10.0, daily_targets.protein_g - totals.consumed.protein_g),
+                                    1,
+                                ),
+                                "carbs_g": round(
+                                    max(0.0, daily_targets.carbs_g - totals.consumed.carbs_g),
+                                    1,
+                                ),
+                                "fat_g": round(
+                                    max(5.0, daily_targets.fat_g - totals.consumed.fat_g),
+                                    1,
+                                ),
+                                "fiber_g": round(
+                                    max(0.0, daily_targets.fiber_g - (totals.consumed.fiber_g or 0.0)),
+                                    1,
+                                ),
+                            }
+                        )
+                        day_slots = uncovered_slots
+                        day_slot_targets = allocate_slot_targets(
+                            rem_targets, uncovered_slots
+                        )
+                        day_scale_target = Macros(
+                            kcal=rem_targets.target_kcal,
+                            protein_g=rem_targets.protein_g,
+                            carbs_g=rem_targets.carbs_g,
+                            fat_g=rem_targets.fat_g,
+                            fiber_g=rem_targets.fiber_g,
+                        )
+
+            # Meal-prep reuse on alternate days when requested (only from complete full days)
+            if (
+                options.meal_prep_mode
+                and prev_day_skeletons is not None
+                and offset % 2 == 1
+                and not is_partial_today
+            ):
                 slot_inputs = [
-                    (slot_name, ings, slot_targets.get(slot_name, day_target_macros))
+                    (slot_name, ings, day_slot_targets.get(slot_name, day_scale_target))
                     for slot_name, _, _, _, _, ings in prev_day_skeletons
                 ]
-                scaled_meals, _, _ = scale_day_meals(slot_inputs, day_target_macros)
+                scaled_meals, _, _ = scale_day_meals(slot_inputs, day_scale_target)
                 day_items: list[MealPlanItem] = []
                 for idx, (slot_name, title, prep_min, steps, tips, _) in enumerate(
                     prev_day_skeletons
@@ -387,8 +468,8 @@ class MealPlannerService:
                 profile=profile,
                 ctx=ctx,
                 plan_date_str=cur_date.isoformat(),
-                slots=slots,
-                slot_targets=slot_targets,
+                slots=day_slots,
+                slot_targets=day_slot_targets,
                 options=options,
                 previous_titles=generated_titles,
                 vault_catalog_hint=vault_hint,
@@ -398,7 +479,7 @@ class MealPlannerService:
                 llm_client=llm_client,
                 profile=profile,
                 ctx=ctx,
-                slots=slots,
+                slots=day_slots,
                 system_prompt=sys_prompt,
                 user_prompt=user_prompt,
                 resolve_cache=resolve_cache,
@@ -409,14 +490,14 @@ class MealPlannerService:
                 (
                     skel.meal_slot,
                     ings,
-                    slot_targets.get(skel.meal_slot, day_target_macros),
+                    day_slot_targets.get(skel.meal_slot, day_scale_target),
                 )
                 for skel, ings in day_resolved
             ]
-            scaled_meals, _, _ = scale_day_meals(slot_inputs, day_target_macros)
+            scaled_meals, _, _ = scale_day_meals(slot_inputs, day_scale_target)
 
             day_items = []
-            prev_day_skeletons = []
+            prev_day_skeletons = [] if not is_partial_today else None
             for idx, (skel, ings) in enumerate(day_resolved):
                 _, scaled_ings, meal_macros, meal_warn = scaled_meals[idx]
                 generated_titles.append(skel.title)
@@ -433,9 +514,10 @@ class MealPlannerService:
                         macro_fit_warning=meal_warn,
                     )
                 )
-                prev_day_skeletons.append(
-                    (skel.meal_slot, skel.title, skel.prep_minutes, skel.steps, skel.tips, ings)
-                )
+                if prev_day_skeletons is not None:
+                    prev_day_skeletons.append(
+                        (skel.meal_slot, skel.title, skel.prep_minutes, skel.steps, skel.tips, ings)
+                    )
 
             days.append(
                 MealPlanDay(
@@ -740,7 +822,7 @@ class MealPlannerService:
                 )
                 m.meal_slot = resolve_meal_slot(
                     m.meal_slot or fallback,
-                    profile.meal_slots,
+                    slots,
                     language=profile.language,
                 )
             passed, violations = await self._validate_and_resolve_skeletons(
@@ -786,7 +868,7 @@ class MealPlannerService:
                     )
                     m.meal_slot = resolve_meal_slot(
                         m.meal_slot or fallback,
-                        profile.meal_slots,
+                        slots,
                         language=profile.language,
                     )
                 retry_passed, retry_violations = await self._validate_and_resolve_skeletons(
@@ -1069,7 +1151,20 @@ class MealPlannerService:
                 "oil": "Fats",
                 "nuts": "Fats",
             }
+        allowed_recipe_fids = (
+            await self._recipe_repo.list_planner_allowed_food_ids()
+            if self._recipe_repo is not None
+            else set()
+        )
+        homemade_names: list[str] = []
         for food in foods:
+            if food.source == FoodSource.RECIPE:
+                if food.food_id not in allowed_recipe_fids:
+                    continue
+                label = food.localized_name(profile.language)
+                if label not in homemade_names and len(homemade_names) < 4:
+                    homemade_names.append(label)
+                continue
             bucket = cat_to_bucket.get(food.category.lower())
             if bucket is None or len(buckets[bucket]) >= 8:
                 continue
@@ -1081,7 +1176,9 @@ class MealPlannerService:
             for bucket, names in buckets.items()
             if names
         ]
-        return "\n".join(lines)[:1000]
+        if homemade_names:
+            lines.insert(0, f"- Homemade: {', '.join(homemade_names)}")
+        return "\n".join(lines)[:1200]
 
     @staticmethod
     def _detect_suggestion_quality_issues(

@@ -1,6 +1,7 @@
-/** Food Vault View: category filters, full pagination, add global foods, personal overrides */
+/** Food Vault View: Foods catalog & Homemade Recipes archive */
 import { t } from "../i18n/index.js";
 import { escapeHtml, localizedFoodName, round1 } from "../utils.js";
+import { renderRecipesSubview } from "./recipes-subview.js";
 
 const VAULT_CATEGORIES = [
   "all",
@@ -13,8 +14,40 @@ const VAULT_CATEGORIES = [
   "other",
 ];
 
-export function renderVaultView(container, vaultState, uiState, callbacks) {
+export function renderVaultView(
+  container,
+  vaultState,
+  uiState,
+  callbacks,
+  recipeState = null,
+  dashboard = null
+) {
   const lang = uiState.language;
+  const subTab = vaultState.subTab === "recipes" ? "recipes" : "foods";
+  const subTabBarHtml = `
+    <div class="subtab-bar">
+      <button type="button" class="subtab-btn vault-subtab-btn ${subTab === "foods" ? "active" : ""}" data-subtab="foods">🥫 ${escapeHtml(t(lang, "vault_subtab_foods"))}</button>
+      <button type="button" class="subtab-btn vault-subtab-btn ${subTab === "recipes" ? "active" : ""}" data-subtab="recipes">📖 ${escapeHtml(t(lang, "vault_subtab_recipes"))}</button>
+    </div>
+  `;
+
+  if (subTab === "recipes") {
+    container.innerHTML = `${subTabBarHtml}<div id="recipes-subview-host"></div>`;
+    container.querySelectorAll(".vault-subtab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        callbacks.onSwitchVaultSubTab?.(btn.getAttribute("data-subtab") || "foods");
+      });
+    });
+    renderRecipesSubview(
+      container.querySelector("#recipes-subview-host"),
+      recipeState || {},
+      dashboard,
+      uiState,
+      callbacks
+    );
+    return;
+  }
+
   const foods = vaultState.foods || [];
   const query = vaultState.query || "";
   const category = vaultState.category || "all";
@@ -30,6 +63,7 @@ export function renderVaultView(container, vaultState, uiState, callbacks) {
   const endIdx = Math.min(totalCount, offset + foods.length);
 
   container.innerHTML = `
+    ${subTabBarHtml}
     <div class="quick-input-row" style="margin-bottom: 10px;">
       <input type="text" id="vault-search-input" value="${escapeHtml(query)}" placeholder="${escapeHtml(t(lang, "vault_search_placeholder"))}" />
       <button type="button" id="vault-search-btn">${escapeHtml(t(lang, "search_btn"))}</button>
@@ -158,6 +192,7 @@ export function renderVaultView(container, vaultState, uiState, callbacks) {
             <div>
               <strong>${escapeHtml(localizedFoodName(f, lang))}</strong>
               ${f.brand ? `<span class="pill">${escapeHtml(f.brand)}</span>` : ""}
+              ${f.source === "recipe" ? `<span class="pill">📖 ${escapeHtml(t(lang, "recipe_badge"))}</span>` : ""}
               ${f.verified ? `<span class="pill good">${escapeHtml(t(lang, "verified_badge"))}</span>` : ""}
               ${f.has_override ? `<span class="pill">${escapeHtml(t(lang, "override_badge"))}</span>` : ""}
               ${f.atwater_warning ? `<span class="pill warn">⚠️</span>` : ""}
@@ -182,6 +217,12 @@ export function renderVaultView(container, vaultState, uiState, callbacks) {
       </div>
     </div>
   `;
+
+  container.querySelectorAll(".vault-subtab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      callbacks.onSwitchVaultSubTab?.(btn.getAttribute("data-subtab") || "foods");
+    });
+  });
 
   const triggerSearch = () => {
     const q = (container.querySelector("#vault-search-input")?.value || "").trim();

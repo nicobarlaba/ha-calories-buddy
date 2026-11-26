@@ -297,3 +297,33 @@ async def test_sensors_unit_conversion_unavailable_fallback_and_calendars(
     assert any("Fib" in ev.get("description", "") for ev in cal_events)
     retro_ev = next(ev for ev in cal_events if "Avena test" in ev["summary"])
     assert retro_ev["start"][11:16] == "08:00"
+
+    # Log an off-plan Dinner -> planned '📋 [Piano - Cena]' disappears dynamically from calendar
+    await hass.services.async_call(
+        DOMAIN,
+        "log_meal_item",
+        {
+            "person": "Marco",
+            "food_id": "seed_chicken_breast_raw",
+            "quantity": 150,
+            "unit": "g",
+            "state": "raw",
+            "meal_slot": "Cena",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    events_after_offplan = await hass.services.async_call(
+        "calendar",
+        "get_events",
+        {
+            "entity_id": marco_cals[0].entity_id,
+            "start_date_time": (now - timedelta(hours=24)).isoformat(),
+            "end_date_time": (now + timedelta(hours=24)).isoformat(),
+        },
+        blocking=True,
+        return_response=True,
+    )
+    cal_after = events_after_offplan[marco_cals[0].entity_id]["events"]
+    assert not any("Salmone al forno" in ev["summary"] for ev in cal_after)
+    assert any("🍽️" in ev["summary"] and "Cena" in ev["summary"] for ev in cal_after)

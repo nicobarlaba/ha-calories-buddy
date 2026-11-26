@@ -23,16 +23,21 @@ from custom_components.ha_calories_buddy.core.models import (
     LabelStandard,
     Macros,
     MealFeedbackRating,
+    MealPlan,
     MealStatus,
     MealSuggestion,
     PersonFoodOverride,
     PersonProfile,
     PlanGenerationOptions,
+    PlanItemStatus,
     PreferenceScope,
     PreferenceStance,
     PreparationState,
 )
 from custom_components.ha_calories_buddy.core.nutrition.atwater import check_atwater
+from custom_components.ha_calories_buddy.core.nutrition.recipes import (
+    parse_recipe_ingredient_inputs,
+)
 from custom_components.ha_calories_buddy.core.nutrition.yield_factors import (
     default_yield_for_category,
 )
@@ -41,6 +46,7 @@ from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     default_slots_for_language,
+    extract_logged_slot_keys,
     resolve_meal_slot,
 )
 from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
@@ -84,6 +90,36 @@ def _safe_person_payload(
         "llm_enabled": runtime.is_llm_enabled(profile),
         "meal_slots": [s.model_dump(mode="json") for s in profile.meal_slots],
     }
+
+
+async def _serialize_plan_with_coverage(
+    runtime: DomainRuntime,
+    person_id: str,
+    plan: MealPlan | None,
+) -> dict[str, Any] | None:
+    """Serialize a MealPlan annotating PLANNED items superseded by non-deleted logs."""
+    if plan is None:
+        return None
+    range_meals = await runtime.meal_repo.list_meals_for_range(
+        person_id, plan.start_date, plan.end_date
+    )
+    covered_by_date: dict[date, set[str]] = {}
+    for meal in range_meals:
+        if meal.status != MealStatus.DELETED:
+            slot_key = normalize_text(meal.meal_slot)
+            if slot_key:
+                covered_by_date.setdefault(meal.log_date, set()).add(slot_key)
+
+    payload = plan.model_dump(mode="json")
+    for day_dict in payload.get("days", []):
+        day_d = date.fromisoformat(day_dict["plan_date"])
+        day_slots = covered_by_date.get(day_d, set())
+        for item_dict in day_dict.get("items", []):
+            item_dict["covered_by_log"] = (
+                item_dict.get("status") == PlanItemStatus.PLANNED.value
+                and normalize_text(item_dict.get("meal_slot", "")) in day_slots
+            )
+    return payload
 
 
 def async_register_websocket_api(hass: HomeAssistant) -> None:
@@ -144,6 +180,15 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             profile.person_id, req_date, req_date
         )
         planned_today = [item for _, item in planned_pairs]
+        logged_slots = extract_logged_slot_keys(meals)
+        planned_payload = []
+        for p in planned_today:
+            item_dict = p.model_dump(mode="json")
+            item_dict["covered_by_log"] = (
+                p.status == PlanItemStatus.PLANNED
+                and normalize_text(p.meal_slot) in logged_slots
+            )
+            planned_payload.append(item_dict)
 
         lean_mass_kg = (
             round(state.weight_kg * (1.0 - state.body_fat_pct / 100.0), 1)
@@ -166,7 +211,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
                 "targets": state.targets.model_dump(mode="json"),
                 "totals": totals.model_dump(mode="json"),
                 "meals": [m.model_dump(mode="json") for m in meals],
-                "planned_today": [p.model_dump(mode="json") for p in planned_today],
+                "planned_today": planned_payload,
                 "latest_weight_kg": state.latest_weight_kg,
                 "biometrics": {
                     "weight_kg": state.weight_kg,
@@ -721,9 +766,12 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         plan = await runtime.plan_repo.get_active_plan(
             profile.person_id, reference_date=ref_d
         )
+        plan_payload = await _serialize_plan_with_coverage(
+            runtime, profile.person_id, plan
+        )
         connection.send_result(
             msg["id"],
-            {"plan": plan.model_dump(mode="json") if plan else None},
+            {"plan": plan_payload},
         )
 
     @websocket_command(
@@ -773,6 +821,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
                 start_date=start_d,
                 daily_targets=data.targets,
                 options=opts,
+                reference_today=data.today,
             )
         except Exception as exc:  # noqa: BLE001
             connection.send_error(msg["id"], "generate_plan_failed", str(exc))
@@ -780,7 +829,10 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         await runtime.async_notify_person_updated(
             profile.person_id, "ws_generate_plan"
         )
-        connection.send_result(msg["id"], {"plan": plan.model_dump(mode="json")})
+        plan_payload = await _serialize_plan_with_coverage(
+            runtime, profile.person_id, plan
+        )
+        connection.send_result(msg["id"], {"plan": plan_payload})
 
     @websocket_command(
         {
@@ -1133,6 +1185,141 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         )
         connection.send_result(msg["id"], {"feedback": fb.model_dump(mode="json")})
 
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/list_recipes",
+            vol.Optional("person_id"): str,
+            vol.Optional("query", default=""): str,
+            vol.Optional("limit", default=50): vol.Coerce(int),
+            vol.Optional("offset", default=0): vol.Coerce(int),
+        }
+    )
+    @async_response
+    async def ws_list_recipes(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        safe_limit = max(1, min(100, int(msg.get("limit", 50))))
+        safe_offset = max(0, int(msg.get("offset", 0)))
+        recipes, total_count = await runtime.recipe_repo.list_recipes(
+            query=str(msg.get("query") or ""),
+            limit=safe_limit,
+            offset=safe_offset,
+        )
+        connection.send_result(
+            msg["id"],
+            {
+                "recipes": [r.model_dump(mode="json") for r in recipes],
+                "total_count": total_count,
+            },
+        )
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/save_recipe",
+            vol.Optional("person_id"): str,
+            vol.Optional("recipe_id"): vol.Any(str, None),
+            vol.Required("name"): str,
+            vol.Required("ingredients"): list,
+            vol.Optional("servings", default=1.0): vol.Coerce(float),
+            vol.Optional("serving_unit", default="serving"): str,
+            vol.Optional("final_weight_g"): vol.Any(vol.Coerce(float), None),
+            vol.Optional("category", default="other"): str,
+            vol.Optional("allow_in_planner", default=False): bool,
+            vol.Optional("notes", default=""): str,
+        }
+    )
+    @async_response
+    async def ws_save_recipe(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        try:
+            ing_inputs = parse_recipe_ingredient_inputs(list(msg["ingredients"]))
+            recipe = await runtime.recipe_service.save_recipe(
+                profile,
+                recipe_id=msg.get("recipe_id") or None,
+                name=str(msg["name"]),
+                ingredients=ing_inputs,
+                servings=float(msg.get("servings", 1.0)),
+                serving_unit=str(msg.get("serving_unit") or "serving"),
+                final_weight_g=(
+                    float(msg["final_weight_g"])
+                    if msg.get("final_weight_g") not in (None, "")
+                    else None
+                ),
+                category=str(msg.get("category") or "other"),
+                allow_in_planner=bool(msg.get("allow_in_planner", False)),
+                notes=str(msg.get("notes") or ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            connection.send_error(msg["id"], "save_recipe_failed", str(exc))
+            return
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_save_recipe"
+        )
+        connection.send_result(msg["id"], {"recipe": recipe.model_dump(mode="json")})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/delete_recipe",
+            vol.Required("recipe_id"): str,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_delete_recipe(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        deleted = await runtime.recipe_service.delete_recipe(str(msg["recipe_id"]))
+        if deleted:
+            await runtime.async_notify_person_updated(
+                profile.person_id, "ws_delete_recipe"
+            )
+        connection.send_result(msg["id"], {"deleted": deleted})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/parse_recipe_text",
+            vol.Required("text"): str,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_parse_recipe_text(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        try:
+            draft = await runtime.recipe_service.parse_recipe_from_text(
+                profile, str(msg["text"])
+            )
+        except Exception as exc:  # noqa: BLE001
+            connection.send_error(msg["id"], "parse_recipe_failed", str(exc))
+            return
+        connection.send_result(msg["id"], {"draft": draft})
+
     for cmd in (
         ws_list_persons,
         ws_dashboard,
@@ -1160,5 +1347,9 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         ws_upsert_preference,
         ws_delete_preference,
         ws_set_meal_feedback,
+        ws_list_recipes,
+        ws_save_recipe,
+        ws_delete_recipe,
+        ws_parse_recipe_text,
     ):
         websocket_api.async_register_command(hass, cmd)

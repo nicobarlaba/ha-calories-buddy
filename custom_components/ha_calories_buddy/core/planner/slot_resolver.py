@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, time
 
-from custom_components.ha_calories_buddy.core.models import MealSlotConfig
+from custom_components.ha_calories_buddy.core.models import (
+    MealLog,
+    MealSlotConfig,
+    MealStatus,
+)
 from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
 
 _JUNK_SLOTS = frozenset(
@@ -270,3 +274,12 @@ def resolve_meal_slot(
 
     # 4. Deterministic time-of-day fallback (never return 'unspecified')
     return default_slot_for_time(slots, language=language, now_time=now_time)
+
+
+def extract_logged_slot_keys(meals: list[MealLog]) -> set[str]:
+    """Return normalized meal_slot names already covered by non-deleted logs."""
+    return {
+        normalize_text(m.meal_slot)
+        for m in meals
+        if m.status != MealStatus.DELETED and normalize_text(m.meal_slot)
+    }

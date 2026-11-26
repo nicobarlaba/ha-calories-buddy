@@ -1,4 +1,4 @@
-/** HA Calories Buddy Custom Lovelace Card v0.2.5 (Zero-Build Modular ES Web Component) */
+/** HA Calories Buddy Custom Lovelace Card v0.2.6 (Zero-Build Modular ES Web Component) */
 import { CaloriesBuddyApi } from "./api.js";
 import { openBarcodeScannerModal } from "./components/barcode-scanner.js";
 import { t } from "./i18n/index.js";
@@ -21,6 +21,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
     this._activeTab = "today";
     this._dashboard = null;
     this._vaultState = {
+      subTab: "foods",
       query: "",
       category: "all",
       foods: [],
@@ -29,6 +30,16 @@ class HaCaloriesBuddyCard extends HTMLElement {
       limit: 20,
       showAddForm: false,
       overrideFood: null,
+    };
+    this._recipeState = {
+      loaded: false,
+      query: "",
+      recipes: [],
+      totalCount: 0,
+      showEditor: false,
+      editingRecipeId: null,
+      draft: null,
+      quickLogRecipeId: null,
     };
     this._planState = {
       plan: null,
@@ -148,6 +159,8 @@ class HaCaloriesBuddyCard extends HTMLElement {
       await this._loadDashboard();
       if (this._activeTab === "plan" && this._planState.plan) {
         await this._loadPlan();
+      } else if (this._activeTab === "vault" && this._vaultState.subTab === "recipes") {
+        await this._loadRecipes(this._recipeState.query);
       }
     }, 300);
   }
@@ -252,6 +265,26 @@ class HaCaloriesBuddyCard extends HTMLElement {
       this._render();
     } catch (err) {
       this._uiState.error = err?.message || "Search failed";
+      this._render();
+    }
+  }
+
+  async _loadRecipes(query = "") {
+    if (!this._api || !this._activePersonId) return;
+    try {
+      const resp = await this._api.listRecipes(this._activePersonId, query, {
+        limit: 50,
+        offset: 0,
+      });
+      this._recipeState.loaded = true;
+      this._recipeState.query = query;
+      this._recipeState.recipes = resp.recipes || [];
+      this._recipeState.totalCount = Number(
+        resp.total_count ?? this._recipeState.recipes.length
+      );
+      this._render();
+    } catch (err) {
+      this._uiState.error = err?.message || "Failed to load recipes";
       this._render();
     }
   }
@@ -372,7 +405,11 @@ class HaCaloriesBuddyCard extends HTMLElement {
       if (this._activeTab === "plan") {
         await this._loadPlan();
       } else if (this._activeTab === "vault") {
-        await this._loadVault(this._vaultState.query, this._vaultState.category, this._vaultState.offset);
+        if (this._vaultState.subTab === "recipes") {
+          await this._loadRecipes(this._recipeState.query);
+        } else {
+          await this._loadVault(this._vaultState.query, this._vaultState.category, this._vaultState.offset);
+        }
       } else if (this._activeTab === "preferences") {
         await this._loadPreferences();
       }
@@ -385,9 +422,15 @@ class HaCaloriesBuddyCard extends HTMLElement {
       this._planState.suggestions = [];
       this._planState.suggestMeta = null;
       this._prefState.loaded = false;
+      this._recipeState.loaded = false;
+      this._recipeState.quickLogRecipeId = null;
       await this._loadDashboard();
       if (this._activeTab === "vault") {
-        await this._loadVault(this._vaultState.query, this._vaultState.category, 0);
+        if (this._vaultState.subTab === "recipes") {
+          await this._loadRecipes(this._recipeState.query);
+        } else {
+          await this._loadVault(this._vaultState.query, this._vaultState.category, 0);
+        }
       } else if (this._activeTab === "plan") {
         await this._loadPlan();
       } else if (this._activeTab === "preferences") {
@@ -405,6 +448,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
             await this._api.restoreMeal(this._activePersonId, lid);
           }
           await this._loadDashboard();
+          if (this._planState.plan) await this._loadPlan();
         });
       }
     });
@@ -412,9 +456,15 @@ class HaCaloriesBuddyCard extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         this._activeTab = btn.getAttribute("data-tab");
-        if (this._activeTab === "vault" && this._vaultState.foods.length === 0) {
-          await this._loadVault("", "all", 0);
-        } else if (this._activeTab === "plan" && !this._planState.plan) {
+        if (this._activeTab === "vault") {
+          if (this._vaultState.subTab === "recipes" && !this._recipeState.loaded) {
+            await this._loadRecipes(this._recipeState.query);
+          } else if (this._vaultState.subTab !== "recipes" && this._vaultState.foods.length === 0) {
+            await this._loadVault("", "all", 0);
+          } else {
+            this._render();
+          }
+        } else if (this._activeTab === "plan") {
           await this._loadPlan();
         } else if (this._activeTab === "preferences" && !this._prefState.loaded) {
           await this._loadPreferences();
@@ -669,29 +719,169 @@ class HaCaloriesBuddyCard extends HTMLElement {
           }),
       });
     } else if (this._activeTab === "vault") {
-      renderVaultView(viewHost, this._vaultState, this._uiState, {
-        onSearchVault: (q, cat = "all", off = 0) => this._loadVault(q, cat, off),
-        onOpenBarcode: openBarcode,
-        onToggleAddForm: () => {
-          this._vaultState.showAddForm = !this._vaultState.showAddForm;
-          this._render();
+      renderVaultView(
+        viewHost,
+        this._vaultState,
+        this._uiState,
+        {
+          api: this._api,
+          onSwitchVaultSubTab: async (subTab) => {
+            this._vaultState.subTab = subTab === "recipes" ? "recipes" : "foods";
+            if (this._vaultState.subTab === "recipes" && !this._recipeState.loaded) {
+              await this._loadRecipes(this._recipeState.query);
+            } else if (
+              this._vaultState.subTab === "foods" &&
+              this._vaultState.foods.length === 0
+            ) {
+              await this._loadVault(this._vaultState.query, this._vaultState.category, 0);
+            } else {
+              this._render();
+            }
+          },
+          onSearchVault: (q, cat = "all", off = 0) => this._loadVault(q, cat, off),
+          onOpenBarcode: openBarcode,
+          onToggleAddForm: () => {
+            this._vaultState.showAddForm = !this._vaultState.showAddForm;
+            this._render();
+          },
+          onSelectOverrideFood: (food) => {
+            this._vaultState.overrideFood = food;
+            this._render();
+          },
+          onSaveFood: (payload) =>
+            this._withBusy(async () => {
+              await this._api.saveFood(this._activePersonId, payload);
+              this._vaultState.showAddForm = false;
+              this._vaultState.overrideFood = null;
+              await this._loadVault(
+                this._vaultState.query,
+                this._vaultState.category,
+                this._vaultState.offset
+              );
+            }),
+          onSearchRecipes: (q) => this._loadRecipes(q),
+          onToggleRecipeEditor: (open) => {
+            this._recipeState.showEditor = Boolean(open);
+            this._recipeState.editingRecipeId = null;
+            this._recipeState.draft = this._recipeState.showEditor
+              ? {
+                  recipe_id: null,
+                  name: "",
+                  category: "other",
+                  servings: 1,
+                  serving_unit: "serving",
+                  final_weight_g: "",
+                  allow_in_planner: false,
+                  notes: "",
+                  ingredients: [],
+                }
+              : null;
+            this._render();
+          },
+          onEditRecipe: (rec) => {
+            this._recipeState.editingRecipeId = rec.recipe_id;
+            this._recipeState.showEditor = true;
+            this._recipeState.quickLogRecipeId = null;
+            this._recipeState.draft = {
+              recipe_id: rec.recipe_id,
+              name: rec.name || "",
+              category: rec.category || "other",
+              servings: rec.servings || 1,
+              serving_unit: rec.serving_unit || "serving",
+              final_weight_g: rec.final_weight_g || "",
+              allow_in_planner: Boolean(rec.allow_in_planner),
+              notes: rec.notes || "",
+              ingredients: (rec.ingredients || []).map((ing) => {
+                const g = Math.max(1, Number(ing.grams || 100));
+                const factor = 100 / g;
+                const m = ing.macros || {};
+                return {
+                  food_id: ing.food_id || null,
+                  name: ing.display_name || "",
+                  quantity: ing.input_quantity || g,
+                  unit: ing.input_unit || "g",
+                  state: ing.input_state || "unspecified",
+                  base_quantity: ing.input_quantity || g,
+                  grams_estimate: ing.grams || g,
+                  ref_state: ing.input_state || "unspecified",
+                  yield_factor: 1.0,
+                  macros_per_100g: {
+                    kcal: (Number(m.kcal) || 0) * factor,
+                    protein_g: (Number(m.protein_g) || 0) * factor,
+                    carbs_g: (Number(m.carbs_g) || 0) * factor,
+                    fat_g: (Number(m.fat_g) || 0) * factor,
+                    fiber_g: (Number(m.fiber_g) || 0) * factor,
+                  },
+                };
+              }),
+            };
+            this._render();
+          },
+          onParseRecipeText: (text) =>
+            this._withBusy(async () => {
+              const resp = await this._api.parseRecipeText(this._activePersonId, text);
+              const parsed = resp?.draft;
+              if (parsed) {
+                const cur = this._recipeState.draft || {};
+                this._recipeState.draft = {
+                  recipe_id: cur.recipe_id || null,
+                  name: parsed.name || cur.name || "",
+                  category: parsed.category || "other",
+                  servings: parsed.servings || 1,
+                  serving_unit: parsed.serving_unit || "serving",
+                  final_weight_g: parsed.final_weight_g || "",
+                  allow_in_planner: Boolean(cur.allow_in_planner),
+                  notes: parsed.notes || "",
+                  ingredients: (parsed.ingredients || []).map((i) => ({
+                    food_id: i.food_id || null,
+                    name: i.name || "",
+                    quantity: i.quantity || 100,
+                    unit: i.unit || "g",
+                    state: i.state || "unspecified",
+                    base_quantity: i.quantity || 100,
+                    grams_estimate: i.grams_estimate || 100,
+                    macros_per_100g: i.macros_per_100g || null,
+                    yield_factor: i.yield_factor || 1.0,
+                    ref_state: i.ref_state || "ready_to_eat",
+                  })),
+                };
+              }
+            }),
+          onSaveRecipe: (payload) =>
+            this._withBusy(async () => {
+              await this._api.saveRecipe(this._activePersonId, payload);
+              this._recipeState.showEditor = false;
+              this._recipeState.editingRecipeId = null;
+              this._recipeState.draft = null;
+              this._vaultState.foods = [];
+              await this._loadRecipes(this._recipeState.query);
+              this._showInfoToast(t(this._uiState.language, "recipe_saved_ok"));
+            }),
+          onDeleteRecipe: (recipeId) =>
+            this._withBusy(async () => {
+              await this._api.deleteRecipe(this._activePersonId, recipeId);
+              this._vaultState.foods = [];
+              await this._loadRecipes(this._recipeState.query);
+              await this._loadDashboard();
+              this._showInfoToast(t(this._uiState.language, "recipe_deleted_ok"));
+            }),
+          onToggleQuickLogRecipe: (recipeId) => {
+            this._recipeState.quickLogRecipeId =
+              this._recipeState.quickLogRecipeId === recipeId ? null : recipeId;
+            this._render();
+          },
+          onQuickLogRecipe: (itemPayload) =>
+            this._withBusy(async () => {
+              await this._api.logItem(this._activePersonId, itemPayload);
+              this._recipeState.quickLogRecipeId = null;
+              await this._loadDashboard();
+              if (this._planState.plan) await this._loadPlan();
+              this._showInfoToast(t(this._uiState.language, "recipe_logged_ok"));
+            }),
         },
-        onSelectOverrideFood: (food) => {
-          this._vaultState.overrideFood = food;
-          this._render();
-        },
-        onSaveFood: (payload) =>
-          this._withBusy(async () => {
-            await this._api.saveFood(this._activePersonId, payload);
-            this._vaultState.showAddForm = false;
-            this._vaultState.overrideFood = null;
-            await this._loadVault(
-              this._vaultState.query,
-              this._vaultState.category,
-              this._vaultState.offset
-            );
-          }),
-      });
+        this._recipeState,
+        this._dashboard
+      );
     } else if (this._activeTab === "preferences") {
       renderPreferencesView(viewHost, this._prefState, this._uiState, {
         onAddPreference: (payload) =>

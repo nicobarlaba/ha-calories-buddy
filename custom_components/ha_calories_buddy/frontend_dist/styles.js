@@ -281,6 +281,12 @@ export const CARD_STYLES = `
     border-color: var(--primary-color, #03a9f4);
     background: rgba(3, 169, 244, 0.04);
   }
+  .meal-card.covered {
+    opacity: 0.68;
+    border-style: solid;
+    border-color: var(--divider-color, rgba(127, 127, 127, 0.3));
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.05));
+  }
   .meal-header {
     display: flex;
     justify-content: space-between;
@@ -525,5 +531,46 @@ export const CARD_STYLES = `
   .bio-stat-val {
     font-size: 1rem;
     font-weight: 700;
+  }
+  .subtab-bar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+    padding: 4px;
+    border-radius: 10px;
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.1));
+  }
+  .subtab-btn {
+    flex: 1;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--secondary-text-color);
+    font-weight: 600;
+    font-size: 0.84rem;
+    border: none;
+  }
+  .subtab-btn.active {
+    background: var(--card-background-color, #fff);
+    color: var(--primary-text-color);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  }
+  .recipe-preview-box {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(76, 175, 80, 0.09);
+    border: 1px solid rgba(76, 175, 80, 0.3);
+    font-size: 0.82rem;
+  }
+  .recipe-ing-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 0;
+    border-top: 1px dashed var(--divider-color, rgba(127, 127, 127, 0.2));
+    flex-wrap: wrap;
+    font-size: 0.82rem;
   }
 `;

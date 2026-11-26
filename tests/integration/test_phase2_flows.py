@@ -261,6 +261,18 @@ async def test_end_to_end_phase2_plan_calendar_rebalance_promote_and_preferences
         )
     ).model_dump(mode="json")
 
+    rebalance_breakfast_swap_payload = SingleMealSwapSchema(
+        meal=PlannedMealSkeleton(
+            meal_slot="Colazione",
+            title="Yogurt greco e fiocchi d'avena",
+            prep_minutes=5,
+            ingredients=[
+                PlannedIngredientSpec(name="Yogurt greco 0%", grams=180, preparation_state=PreparationState.READY_TO_EAT, role=IngredientRole.PROTEIN_ANCHOR),
+                PlannedIngredientSpec(name="Fiocchi d'avena", grams=70, preparation_state=PreparationState.RAW, role=IngredientRole.CARB_ANCHOR),
+            ],
+        )
+    ).model_dump(mode="json")
+
     rebalance_swap_payload = SingleMealSwapSchema(
         meal=PlannedMealSkeleton(
             meal_slot="Cena",
@@ -278,7 +290,11 @@ async def test_end_to_end_phase2_plan_calendar_rebalance_promote_and_preferences
         {
             "ha_calories_buddy_DayPlanProposalSchema": [day_proposal, day_proposal],
             "ha_calories_buddy_MealSuggestionListSchema": [suggest_payload],
-            "ha_calories_buddy_SingleMealSwapSchema": [swap_payload, rebalance_swap_payload],
+            "ha_calories_buddy_SingleMealSwapSchema": [
+                swap_payload,
+                rebalance_breakfast_swap_payload,
+                rebalance_swap_payload,
+            ],
         },
     )
     hass.states.async_set("ai_task.google_ai_task", "idle")
@@ -474,6 +490,8 @@ async def test_end_to_end_phase2_plan_calendar_rebalance_promote_and_preferences
     m12 = await client.receive_json()
     assert m12["success"] is True
     assert m12["result"]["rebalance"]["mode"] in {"intraday_rescale", "intraday_swap"}
+    updated_slots = {it["meal_slot"] for it in m12["result"]["rebalance"]["updated_items"]}
+    assert "Spuntino" not in updated_slots
     assert "api_key" not in json.dumps(m12)
 
     cal_after = await hass.services.async_call(

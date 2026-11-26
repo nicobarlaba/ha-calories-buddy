@@ -34,6 +34,7 @@ class FoodSource(StrEnum):
 
     SEED = "seed"
     MANUAL = "manual"
+    RECIPE = "recipe"
     OPEN_FOOD_FACTS = "open_food_facts"
     USDA = "usda"
     LLM_ESTIMATED = "llm_estimated"
@@ -531,3 +532,53 @@ class ShoppingDraft(BaseModel):
     status: str = "draft"
     created_at: datetime = Field(default_factory=utc_now)
     items: list[ShoppingDraftItem] = Field(default_factory=list)
+
+
+class RecipeIngredientInput(BaseModel):
+    """Caller-supplied ingredient specification for creating/updating a recipe."""
+
+    food_id: str | None = None
+    name: str
+    quantity: float = Field(gt=0.0)
+    unit: str = "g"
+    state: PreparationState = PreparationState.UNSPECIFIED
+
+
+class RecipeIngredient(BaseModel):
+    """Persisted, Vault-resolved ingredient inside a HomemadeRecipe."""
+
+    ingredient_id: str
+    recipe_id: str
+    sort_order: int = 0
+    food_id: str | None = None
+    display_name: str
+    input_quantity: float = Field(gt=0.0)
+    input_unit: str = "g"
+    input_state: PreparationState = PreparationState.UNSPECIFIED
+    grams: float = Field(gt=0.0)
+    macros: Macros
+
+
+class HomemadeRecipe(BaseModel):
+    """Reusable homemade multi-ingredient recipe synced to a Global Food Vault item."""
+
+    recipe_id: str
+    food_id: str
+    name: str
+    normalized_name: str
+    category: str = "other"
+    servings: float = Field(default=1.0, gt=0.0)
+    serving_unit: str = "serving"
+    raw_total_grams: float = Field(gt=0.0)
+    final_weight_g: float | None = Field(default=None, gt=0.0)
+    effective_weight_g: float = Field(gt=0.0)
+    grams_per_serving: float = Field(gt=0.0)
+    total_macros: Macros
+    macros_per_100g: Macros
+    macros_per_serving: Macros
+    allow_in_planner: bool = False
+    notes: str = ""
+    created_by_person_id: str | None = None
+    ingredients: list[RecipeIngredient] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

@@ -1,4 +1,4 @@
-/** WebSocket API client for ha-calories-buddy Lovelace card v0.2.5 */
+/** WebSocket API client for ha-calories-buddy Lovelace card v0.2.6 */
 
 export class CaloriesBuddyApi {
   constructor(hass) {
@@ -214,6 +214,37 @@ export class CaloriesBuddyApi {
       title,
       rating,
       notes,
+    });
+  }
+
+  listRecipes(personId, query = "", opts = {}) {
+    const payload = {
+      ...(personId ? { person_id: personId } : {}),
+      query,
+    };
+    if (opts.limit !== undefined) payload.limit = opts.limit;
+    if (opts.offset !== undefined) payload.offset = opts.offset;
+    return this.call("list_recipes", payload);
+  }
+
+  saveRecipe(personId, recipePayload) {
+    return this.call("save_recipe", {
+      ...(personId ? { person_id: personId } : {}),
+      ...recipePayload,
+    });
+  }
+
+  deleteRecipe(personId, recipeId) {
+    return this.call("delete_recipe", {
+      ...(personId ? { person_id: personId } : {}),
+      recipe_id: recipeId,
+    });
+  }
+
+  parseRecipeText(personId, text) {
+    return this.call("parse_recipe_text", {
+      ...(personId ? { person_id: personId } : {}),
+      text,
     });
   }
 }

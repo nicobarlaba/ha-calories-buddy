@@ -7,6 +7,7 @@ import logging
 from datetime import date, timedelta
 
 from custom_components.ha_calories_buddy.core.i18n import format_message
+from custom_components.ha_calories_buddy.core.llm.base import LLMError
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
     Macros,
@@ -30,10 +31,14 @@ from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
 from custom_components.ha_calories_buddy.core.planner.meal_planner import (
     MealPlannerService,
 )
+from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
+    extract_logged_slot_keys,
+)
 from custom_components.ha_calories_buddy.core.storage.meal_repo import MealRepository
 from custom_components.ha_calories_buddy.core.storage.plan_repo import (
     MealPlanRepository,
 )
+from custom_components.ha_calories_buddy.core.storage.seeder import normalize_text
 
 _LOGGER = get_logger(__name__)
 
@@ -73,9 +78,19 @@ class MealRebalancerService:
             fiber_g=max(0.0, daily_targets.fiber_g - (consumed.fiber_g or 0.0)),
         )
 
+        logged_meals = await self._meal_repo.list_meals_for_date(
+            profile.person_id, target_date
+        )
+        logged_slots = extract_logged_slot_keys(logged_meals)
+
         plan_day = await self._plan_repo.get_plan_day(profile.person_id, target_date)
         remaining_items = (
-            [it for it in plan_day.items if it.status == PlanItemStatus.PLANNED]
+            [
+                it
+                for it in plan_day.items
+                if it.status == PlanItemStatus.PLANNED
+                and normalize_text(it.meal_slot) not in logged_slots
+            ]
             if plan_day is not None
             else []
         )
@@ -134,8 +149,8 @@ class MealRebalancerService:
                     swapped.append(updated_it)
                 rescaled_items = swapped
                 used_swap = True
-            except RuntimeError:
-                # No LLM configured: keep best-effort deterministic rescaled items
+            except (RuntimeError, LLMError):
+                # LLM unconfigured or swap failed: keep best-effort deterministic rescaled items
                 warnings.append("llm_unavailable_kept_rescaled")
 
         if not used_swap:

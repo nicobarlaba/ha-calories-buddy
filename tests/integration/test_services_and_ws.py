@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
 from homeassistant.core import Context, HomeAssistant
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockUser
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
@@ -21,6 +23,21 @@ from custom_components.ha_calories_buddy.const import (
     DOMAIN,
     EVENT_DATA_UPDATED,
     LLM_PROVIDER_OLLAMA,
+)
+from custom_components.ha_calories_buddy.core.models import (
+    Macros as CoreMacros,
+)
+from custom_components.ha_calories_buddy.core.models import (
+    MealPlan as CoreMealPlan,
+)
+from custom_components.ha_calories_buddy.core.models import (
+    MealPlanDay as CoreMealPlanDay,
+)
+from custom_components.ha_calories_buddy.core.models import (
+    MealPlanItem as CoreMealPlanItem,
+)
+from custom_components.ha_calories_buddy.core.models import (
+    PlanItemStatus,
 )
 from tests.integration.conftest import setup_hub_and_persons
 
@@ -379,3 +396,130 @@ async def test_services_and_websocket_multi_user_isolation(
     assert bio["weight_kg"] == pytest.approx(78.4)
     assert bio["weight_entity_id"] is None
     assert bio["weight_sensor_available"] is False
+
+    # 8. v0.2.6 Homemade recipes WS & service CRUD + dynamic covered_by_log sync
+    await client.send_json(
+        {
+            "id": 80,
+            "type": f"{DOMAIN}/save_recipe",
+            "name": "Ciambellone integrale",
+            "category": "snack",
+            "servings": 10,
+            "serving_unit": "slice",
+            "final_weight_g": 800,
+            "allow_in_planner": False,
+            "notes": "Cotto 35 min",
+            "ingredients": [
+                {"food_id": "seed_oats_raw", "name": "Fiocchi d'avena", "quantity": 300, "unit": "g", "state": "raw"},
+                {"food_id": "seed_banana", "name": "Banana", "quantity": 250, "unit": "g", "state": "ready_to_eat"},
+            ],
+        }
+    )
+    msg80 = await client.receive_json()
+    assert msg80["success"] is True
+    rec = msg80["result"]["recipe"]
+    assert rec["grams_per_serving"] == pytest.approx(80.0, abs=0.1)
+    assert rec["macros_per_serving"]["kcal"] > 0
+
+    await client.send_json({"id": 81, "type": f"{DOMAIN}/list_recipes", "query": "ciambellone"})
+    msg81 = await client.receive_json()
+    assert msg81["success"] is True
+    assert msg81["result"]["total_count"] == 1
+
+    # Save an active plan item on "Colazione" (uncovered) and verify covered_by_log toggles cleanly
+    today_d = dt_util.now().date()
+    runtime = hass.data[DOMAIN]
+    await runtime.plan_repo.save_plan(
+        CoreMealPlan(
+            plan_id="plan_cov_test",
+            person_id="person_admin",
+            start_date=today_d,
+            end_date=today_d + timedelta(days=1),
+            status="active",
+            days=[
+                CoreMealPlanDay(
+                    plan_day_id="day_cov_0",
+                    plan_id="plan_cov_test",
+                    plan_date=today_d,
+                    target_macros=CoreMacros(kcal=2000, protein_g=140, carbs_g=220, fat_g=60, fiber_g=28),
+                    items=[
+                        CoreMealPlanItem(
+                            plan_item_id="pitem_cov_col",
+                            plan_day_id="day_cov_0",
+                            meal_slot="Colazione",
+                            title="Porridge pianificato",
+                            macros=CoreMacros(kcal=400, protein_g=25, carbs_g=50, fat_g=10, fiber_g=6),
+                            status=PlanItemStatus.PLANNED,
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+
+    await client.send_json({"id": 82, "type": f"{DOMAIN}/get_plan"})
+    msg82 = await client.receive_json()
+    assert msg82["success"] is True
+    assert msg82["result"]["plan"]["days"][0]["items"][0]["covered_by_log"] is False
+
+    # Log an off-plan Colazione item -> dashboard & get_plan report covered_by_log = True
+    await client.send_json(
+        {
+            "id": 83,
+            "type": f"{DOMAIN}/log_item",
+            "food_id": rec["food_id"],
+            "quantity": 1,
+            "unit": "slice",
+            "state": "ready_to_eat",
+            "meal_slot": "Colazione",
+        }
+    )
+    msg83 = await client.receive_json()
+    assert msg83["success"] is True
+    off_col_log_id = msg83["result"]["meal_log"]["log_id"]
+
+    await client.send_json({"id": 84, "type": f"{DOMAIN}/dashboard"})
+    msg84 = await client.receive_json()
+    assert msg84["success"] is True
+    assert msg84["result"]["planned_today"][0]["covered_by_log"] is True
+
+    # Delete off-plan Colazione -> covered_by_log flips back to False automatically
+    await client.send_json({"id": 85, "type": f"{DOMAIN}/delete_meal", "log_id": off_col_log_id})
+    msg85 = await client.receive_json()
+    assert msg85["success"] is True
+
+    await client.send_json({"id": 86, "type": f"{DOMAIN}/get_plan"})
+    msg86 = await client.receive_json()
+    assert msg86["success"] is True
+    assert msg86["result"]["plan"]["days"][0]["items"][0]["covered_by_log"] is False
+
+    # HA service save_recipe & delete_recipe
+    svc_rec = await hass.services.async_call(
+        DOMAIN,
+        "save_recipe",
+        {
+            "name": "Porridge espresso",
+            "servings": 1,
+            "ingredients": [{"food_id": "seed_oats_raw", "name": "Fiocchi d'avena", "quantity": 60, "unit": "g"}],
+        },
+        context=Context(user_id=hass_admin_user.id),
+        blocking=True,
+        return_response=True,
+    )
+    assert svc_rec is not None
+    svc_rec_id = svc_rec["recipe"]["recipe_id"]
+
+    del_rec = await hass.services.async_call(
+        DOMAIN,
+        "delete_recipe",
+        {"recipe_id": svc_rec_id},
+        context=Context(user_id=hass_admin_user.id),
+        blocking=True,
+        return_response=True,
+    )
+    assert del_rec == {"deleted": True}
+
+    await client.send_json({"id": 87, "type": f"{DOMAIN}/delete_recipe", "recipe_id": rec["recipe_id"]})
+    msg87 = await client.receive_json()
+    assert msg87["success"] is True
+    assert msg87["result"]["deleted"] is True

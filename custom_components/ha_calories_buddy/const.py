@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "ha_calories_buddy"
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 
 STORAGE_DB_FILENAME = "ha_calories_buddy.db"
 
