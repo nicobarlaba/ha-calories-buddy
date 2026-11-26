@@ -538,3 +538,137 @@ delete_recipe:
       name: Person (optional)
       selector:
         text:
+
+create_shopping_draft:
+  name: Create Shopping List Draft
+  description: Aggregate remaining unconsumed planned meals across a date range into an editable shopping draft.
+  fields:
+    start_date:
+      name: Start Date (YYYY-MM-DD, optional)
+      selector:
+        text:
+    end_date:
+      name: End Date (YYYY-MM-DD, optional)
+      selector:
+        text:
+    include_household:
+      name: Merge Household Plans
+      default: false
+      selector:
+        boolean:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+commit_shopping_draft:
+  name: Push Shopping Draft to Todo List
+  description: Send checked items from the active shopping draft to Home Assistant todo.* skipping duplicates.
+  fields:
+    draft_id:
+      name: Draft ID (optional, defaults to latest)
+      selector:
+        text:
+    todo_entity:
+      name: Target Todo List (optional)
+      selector:
+        entity:
+          domain: todo
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+set_training_day:
+  name: Set or Clear Training Day Override
+  description: Manually mark a date as Training or Rest Day (or clear override to follow weekly schedule/calendar).
+  fields:
+    is_training_day:
+      name: Training Day Active
+      default: true
+      selector:
+        boolean:
+    date:
+      name: Date (YYYY-MM-DD, optional)
+      selector:
+        text:
+    clear_override:
+      name: Clear Manual Override
+      default: false
+      selector:
+        boolean:
+    person:
+      name: Person (optional)
+      selector:
+        text:
+
+save_workout_schedule:
+  name: Save Recurring Workout Schedule
+  description: Add or update a weekly recurring workout slot (0=Monday .. 6=Sunday) used for Training Day detection and meal planning.
+  fields:
+    weekday:
+      name: Weekday (0=Mon .. 6=Sun)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 6
+          step: 1
+    title:
+      name: Workout Title
+      required: true
+      selector:
+        text:
+    activity_type:
+      name: Activity Type
+      default: strength
+      selector:
+        select:
+          options:
+            - strength
+            - cardio
+            - running
+            - cycling
+            - hiit
+            - mobility
+            - sport
+            - other
+    duration_min:
+      name: Duration (minutes)
+      default: 60
+      selector:
+        number:
+          min: 5
+          max: 480
+          step: 5
+          unit_of_measurement: min
+    estimated_kcal:
+      name: Estimated Burn (kcal, optional)
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 10
+          unit_of_measurement: kcal
+    time_of_day:
+      name: Time of Day (HH:MM)
+      default: "18:00"
+      selector:
+        text:
+    notes:
+      name: Notes (optional)
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      default: true
+      selector:
+        boolean:
+    schedule_id:
+      name: Schedule ID (to update)
+      selector:
+        text:
+    person:
+      name: Person (optional)
+      selector:
+        text:

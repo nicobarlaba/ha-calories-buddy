@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "ha_calories_buddy"
-VERSION = "0.2.6"
+VERSION = "0.3.0"
 
 STORAGE_DB_FILENAME = "ha_calories_buddy.db"
 
@@ -73,6 +73,8 @@ CONF_TOTAL_KCAL_ENTITY = "total_kcal_entity"
 CONF_STEPS_ENTITY = "steps_entity"
 CONF_TODO_ENTITY = "todo_entity"
 CONF_NOTIFY_SERVICE = "notify_service"
+CONF_WORKOUT_CALENDAR_ENTITY = "workout_calendar_entity"
+CONF_ACTIVITIES_ENTITY = "activities_entity"
 
 # Config keys — LLM Override
 CONF_LLM_OVERRIDE_ENABLED = "llm_override_enabled"

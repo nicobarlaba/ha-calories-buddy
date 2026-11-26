@@ -15,6 +15,7 @@ from homeassistant.util import slugify
 from custom_components.ha_calories_buddy.config_flow import merged_entry_config
 from custom_components.ha_calories_buddy.const import (
     CONF_ACTIVE_KCAL_ENTITY,
+    CONF_ACTIVITIES_ENTITY,
     CONF_ACTIVITY_LEVEL,
     CONF_AI_TASK_ENTITY,
     CONF_ALLERGIES,
@@ -54,7 +55,9 @@ from custom_components.ha_calories_buddy.const import (
     CONF_PERSON_ID,
     CONF_SEX,
     CONF_STEPS_ENTITY,
+    CONF_TARGET_BODY_FAT_PCT,
     CONF_TARGET_MODE,
+    CONF_TARGET_WEIGHT_KG,
     CONF_TDEE_ENGINE,
     CONF_TODO_ENTITY,
     CONF_TOTAL_KCAL_ENTITY,
@@ -62,6 +65,7 @@ from custom_components.ha_calories_buddy.const import (
     CONF_WEARABLE_CORRECTION_FACTOR,
     CONF_WEEKLY_RATE_KG,
     CONF_WEIGHT_ENTITY,
+    CONF_WORKOUT_CALENDAR_ENTITY,
     DEFAULT_LANGUAGE,
     DEFAULT_LLM_TIMEOUT_CLOUD_S,
     DEFAULT_LLM_TIMEOUT_LOCAL_S,
@@ -109,6 +113,9 @@ from custom_components.ha_calories_buddy.core.planner.preferences import (
 from custom_components.ha_calories_buddy.core.planner.rebalancer import (
     MealRebalancerService,
 )
+from custom_components.ha_calories_buddy.core.planner.shopping import (
+    ShoppingListService,
+)
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     slot_approx_minutes,
 )
@@ -124,8 +131,17 @@ from custom_components.ha_calories_buddy.core.storage.preference_repo import (
 from custom_components.ha_calories_buddy.core.storage.profile_repo import ProfileRepository
 from custom_components.ha_calories_buddy.core.storage.recipe_repo import RecipeRepository
 from custom_components.ha_calories_buddy.core.storage.seeder import seed_database_if_empty
+from custom_components.ha_calories_buddy.core.storage.shopping_repo import (
+    ShoppingRepository,
+)
+from custom_components.ha_calories_buddy.core.storage.workout_repo import (
+    WorkoutRepository,
+)
 from custom_components.ha_calories_buddy.frontend import async_register_frontend
 from custom_components.ha_calories_buddy.llm_api import async_register_llm_api
+from custom_components.ha_calories_buddy.notifications import (
+    async_register_notification_listener,
+)
 from custom_components.ha_calories_buddy.runtime import (
     DomainRuntime,
     HubRuntimeData,
@@ -135,7 +151,7 @@ from custom_components.ha_calories_buddy.services import async_register_services
 from custom_components.ha_calories_buddy.websocket_api import async_register_websocket_api
 
 _LOGGER = get_logger(__name__)
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CALENDAR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CALENDAR, Platform.SWITCH]
 
 
 def _split_csv(value: Any) -> list[str]:
@@ -247,9 +263,13 @@ def _build_person_profile(
         steps_entity=cfg.get(CONF_STEPS_ENTITY) or None,
         todo_entity=cfg.get(CONF_TODO_ENTITY) or None,
         notify_service=str(cfg.get(CONF_NOTIFY_SERVICE) or "").strip() or None,
+        workout_calendar_entity=cfg.get(CONF_WORKOUT_CALENDAR_ENTITY) or None,
+        activities_entity=cfg.get(CONF_ACTIVITIES_ENTITY) or None,
     )
 
     body_fat = cfg.get(CONF_BODY_FAT_PCT)
+    target_w = cfg.get(CONF_TARGET_WEIGHT_KG)
+    target_bf = cfg.get(CONF_TARGET_BODY_FAT_PCT)
     return PersonProfile(
         person_id=str(cfg[CONF_PERSON_ID]),
         config_entry_id=entry.entry_id,
@@ -264,6 +284,8 @@ def _build_person_profile(
         body_fat_pct=float(body_fat) if body_fat is not None else None,
         target_mode=target_mode,
         goal_type=GoalType(cfg.get(CONF_GOAL_TYPE, GoalType.MAINTAIN.value)),
+        target_weight_kg=float(target_w) if target_w not in (None, "") else None,
+        target_body_fat_pct=float(target_bf) if target_bf not in (None, "") else None,
         weekly_rate_kg=float(cfg.get(CONF_WEEKLY_RATE_KG, 0.0)),
         tdee_engine=TDEEEngineType(
             cfg.get(CONF_TDEE_ENGINE, TDEEEngineType.STATIC.value)
@@ -304,7 +326,17 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
         preference_repo = PreferenceRepository(db)
         plan_repo = MealPlanRepository(db)
         recipe_repo = RecipeRepository(db)
-        preference_engine = PreferenceEngine(preference_repo, meal_repo)
+        shopping_repo = ShoppingRepository(db)
+        workout_repo = WorkoutRepository(db)
+        preference_engine = PreferenceEngine(
+            preference_repo,
+            meal_repo,
+            global_notes_getter=lambda: (
+                hass.data[DOMAIN].hub.global_baseline_notes
+                if DOMAIN in hass.data and hass.data[DOMAIN].hub is not None
+                else ""
+            ),
+        )
         off_provider = OpenFoodFactsProvider(session)
         usda_provider = USDAProvider(session, api_key=None)
         resolver = FoodResolver(food_repo, off_provider=off_provider, usda_provider=usda_provider)
@@ -335,6 +367,13 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
             resolver=resolver,
             llm_client_getter=lambda _p: None,
         )
+        placeholder_shopping = ShoppingListService(
+            plan_repo=plan_repo,
+            meal_repo=meal_repo,
+            food_repo=food_repo,
+            shopping_repo=shopping_repo,
+            preference_engine=preference_engine,
+        )
 
         runtime = DomainRuntime(
             hass=hass,
@@ -345,6 +384,8 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
             preference_repo=preference_repo,
             plan_repo=plan_repo,
             recipe_repo=recipe_repo,
+            shopping_repo=shopping_repo,
+            workout_repo=workout_repo,
             preference_engine=preference_engine,
             session=session,
             off_provider=off_provider,
@@ -354,6 +395,7 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
             planner_service=placeholder_planner,
             rebalancer_service=placeholder_rebalancer,
             recipe_service=placeholder_recipes,
+            shopping_service=placeholder_shopping,
         )
         runtime.update_usda_api_key(None)
 
@@ -378,6 +420,9 @@ async def _ensure_runtime(hass: HomeAssistant) -> DomainRuntime:
 
         if runtime.llm_api_unsub is None:
             runtime.llm_api_unsub = async_register_llm_api(hass)
+
+        if runtime.notify_action_unsub is None:
+            runtime.notify_action_unsub = async_register_notification_listener(hass)
 
         hass.data[DOMAIN] = runtime
         return runtime
@@ -473,6 +518,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if runtime.llm_api_unsub is not None:
             runtime.llm_api_unsub()
             runtime.llm_api_unsub = None
+        if runtime.notify_action_unsub is not None:
+            runtime.notify_action_unsub()
+            runtime.notify_action_unsub = None
         if runtime.stop_unsub is not None:
             runtime.stop_unsub()
             runtime.stop_unsub = None

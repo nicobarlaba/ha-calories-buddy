@@ -1,6 +1,7 @@
-/** Plan View: 7-day strip, Generate Plan dialog, Suggest Meal advisor, Recipe modal, Swap & Rebalance */
+/** Plan View: Menu | Workouts sub-tabs, 7-day strip, Generate Plan, Suggest Meal, Recipe modal */
 import { t } from "../i18n/index.js";
 import { escapeHtml, parseJsonSafe, pickDefaultSlotForNow, round1 } from "../utils.js";
+import { renderWorkoutsSubview } from "./workouts-subview.js";
 
 function groupIngredientsByCourse(ingredients) {
   const hasCourse = (ingredients || []).some((ing) => Boolean(ing.course));
@@ -105,8 +106,41 @@ function renderRecipeModal(host, lang, item) {
   });
 }
 
-export function renderPlanView(container, planState, dashboard, uiState, callbacks) {
+export function renderPlanView(
+  container,
+  planState,
+  dashboard,
+  uiState,
+  callbacks,
+  workoutState = { data: null, showForm: false }
+) {
   const lang = uiState.language;
+  const subTab = planState.subTab === "workouts" ? "workouts" : "menu";
+
+  const subTabHeader = `
+    <div class="subtab-bar">
+      <button type="button" class="subtab-btn plan-subtab-btn ${subTab === "menu" ? "active" : ""}" data-subtab="menu">🍽️ ${escapeHtml(t(lang, "plan_subtab_menu"))}</button>
+      <button type="button" class="subtab-btn plan-subtab-btn ${subTab === "workouts" ? "active" : ""}" data-subtab="workouts">🏋️ ${escapeHtml(t(lang, "plan_subtab_workouts"))}</button>
+    </div>
+  `;
+
+  if (subTab === "workouts") {
+    container.innerHTML = `${subTabHeader}<div id="workouts-subview-host"></div>`;
+    container.querySelectorAll(".plan-subtab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        callbacks.onSwitchPlanSubTab?.(btn.getAttribute("data-subtab"));
+      });
+    });
+    renderWorkoutsSubview(
+      container.querySelector("#workouts-subview-host"),
+      workoutState,
+      dashboard,
+      uiState,
+      callbacks
+    );
+    return;
+  }
+
   const llmEnabled = Boolean(dashboard?.llm_enabled);
   const slots = dashboard?.person?.meal_slots || [{ name: "Breakfast" }, { name: "Lunch" }, { name: "Snack" }, { name: "Dinner" }];
   const plan = planState.plan || null;
@@ -121,6 +155,7 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
   const sugSlotLabel = suggestMeta?.meal_slot || suggestions[0]?.meal_slot || "";
 
   container.innerHTML = `
+    ${subTabHeader}
     <div class="controls-row" style="margin-bottom: 10px;">
       <button type="button" id="toggle-gen-plan-btn" ${!llmEnabled || uiState.busy ? "disabled" : ""}>📅 ${escapeHtml(t(lang, "generate_plan_btn"))}</button>
       <button type="button" class="secondary" id="toggle-suggest-btn" ${!llmEnabled || uiState.busy ? "disabled" : ""}>🍳 ${escapeHtml(t(lang, "suggest_meal_btn"))}</button>
@@ -332,6 +367,12 @@ export function renderPlanView(container, planState, dashboard, uiState, callbac
 
     <div id="recipe-modal-host"></div>
   `;
+
+  container.querySelectorAll(".plan-subtab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      callbacks.onSwitchPlanSubTab?.(btn.getAttribute("data-subtab"));
+    });
+  });
 
   container.querySelector("#toggle-gen-plan-btn")?.addEventListener("click", callbacks.onToggleGenerate);
   container.querySelector("#cancel-gen-plan-btn")?.addEventListener("click", callbacks.onToggleGenerate);

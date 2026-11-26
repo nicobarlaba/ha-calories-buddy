@@ -1,6 +1,6 @@
 # HA Calories Buddy — User & Operator Manual
 
-**Version:** `0.2.6` (Phase 2 — *The Dietitian & Chef* + Homemade Composite Recipes & Dynamic Plan-Log Sync)  
+**Version:** `0.3.0` (Phase 3 — *The Butler, Workouts, Adaptive TDEE & Trends*)  
 **Minimum Home Assistant:** `2026.10.0` (verified on `2026.11.3` / Python `3.14`)  
 **Languages:** English (`en`) & Italian (`it`)
 
@@ -37,6 +37,8 @@
 ## 2. Installation
 
 ### Option A — Home Assistant Marketplace / HACS (Recommended)
+
+Click the **My Home Assistant** badge in [README.md](../README.md) or add the repository manually:
 
 1. Open **Settings → Marketplace** (or **HACS** on older installs).
 2. Open the top-right `⋮` menu → **Custom repositories**.
@@ -77,12 +79,12 @@
 3. **Step 2 — Biometrics, Goals & TDEE Engine:**
    - Biological Sex, Birth Year, Height (`cm`), Initial Weight (`kg`), optional Body Fat `%` (enables Katch-McArdle BMR).
    - **Target Mode:** `Physiology-Guided` or `Manual / Nutritionist Plan`.
-   - **Goal & Weekly Rate:** `lose_weight`, `maintain`, `recomposition`, or `gain_muscle`, plus target weekly weight change (`kg/week`, e.g., `-0.4`).
-   - **TDEE Engine:** `static` or `wearable_dynamic` + Activity Level (`PAL`) + Wearable Correction Factor (default `1.0`; e.g., `0.85` to offset wearable overestimation).
+   - **Goal, Weekly Rate & Optional Targets:** `lose_weight`, `maintain`, `recomposition`, or `gain_muscle`, target weekly change (`kg/week`), plus optional `target_weight_kg` and `target_body_fat_pct` for Trends ETA projection.
+   - **TDEE Engine:** `static`, `wearable_dynamic`, or `adaptive` (closed-loop EMA weight/body-composition feedback) + Activity Level (`PAL`) + Wearable Correction Factor (default `1.0`).
 4. **Step 3 (Conditional) — Manual / Nutritionist Targets:**
    - Shown only when `Target Mode` is `manual`. Enter daily `kcal`, `protein_g`, `carbs_g`, `fat_g`, plus optional Training Day overrides.
 5. **Step 4 — Biophysical Sensors & Household Services:**
-   - Optionally map existing HA sensors (see [Section 5](#5-biophysical-sensor-mapping-garmin--smart-scales)).
+   - Optionally map existing HA sensors, Garmin Coach workout `calendar.*`, completed activities `sensor.*`, `todo.*`, and `notify.*` service (see [Section 5](#5-biophysical-sensor-mapping-garmin--smart-scales)).
 6. **Step 5 — Per-Person LLM Override (optional):**
    - Leave unchecked to inherit the Hub LLM, or enable to assign a different provider/model to this person.
 7. **Step 6 — Meal Schedule & Dietary Constraints:**
@@ -117,8 +119,10 @@ In Step 4 (or **Configure → Mapped Sensors & Services**), link Home Assistant 
 - **Active Calories Burned Sensor (`sensor.*`, e.g., Garmin Connect):** Automatically converts `kcal`, `kJ`, and `Mcal`.
 - **Total Calories Burned Sensor (`sensor.*`, e.g., Garmin Connect):** Preferred source for `wearable_dynamic` baseline when available.
 - **Daily Steps Sensor (`sensor.*`):** Recorded into daily biometric snapshots.
+- **Workout Schedule Calendar (`calendar.*`, e.g., `calendar.connect_<user>_scheduled_workouts`):** Syncs Garmin Coach / scheduled workouts over a 7-day window to detect Training Days automatically and inform the AI Meal Planner.
+- **Completed Activities Sensor (`sensor.*`, e.g., `sensor.connect_<user>_last_activities`):** Surfaces recent completed activities (name, type, duration, calories) inside **Plan → Workouts**.
 - **Shopping List (`todo.*`):** Target list entity (supports sharing one household list across multiple persons).
-- **Notification Service (e.g., `notify.mobile_app_phone`):** Receives compact meal logging summaries and confirmation alerts.
+- **Notification Service (e.g., `notify.mobile_app_phone`):** Receives Companion App actionable notifications (**Confirm** / **Delete** on pending meals and **Undo** on voice/service logs) handled natively via `mobile_app_notification_action`.
 
 ### Resilience Against Unavailable Sensors
 
@@ -140,6 +144,9 @@ Every night at `23:55` (and whenever you log weight manually), the coordinator p
    - Uses a **7-day rolling average of completed past days** (`total_kcal`, or `BMR + active_kcal × correction_factor`) to establish today's morning baseline—so cumulative wearable sensors starting at `0` at midnight never make your 09:00 AM budget artificially tiny.
    - Only when today's live active expenditure exceeds your 7-day average active burn does the surplus `(today_active - baseline_active) × correction_factor` increase today's budget.
    - Falls back cleanly to the static prior until at least 3 completed past snapshots exist.
+3. **`adaptive` (Closed-Loop Hybrid Model):**
+   - Evaluates a 14–28 day rolling window (requiring `>= 14d` span, `>= 4` weigh-ins, and `>= 70%` logged adherence) comparing intake against **weight EMA (`alpha = 0.12`)** and, when body fat data is available without BIA noise (`|ΔBF%| <= 2.5%`), two-compartment **Fat Mass (`9400 kcal/kg`) + Lean Mass (`1800 kcal/kg`)** energy balance.
+   - Clamps weekly drift to `±75 kcal/week` max, auto-calibrates your Garmin multiplier inside `[0.65, 1.35]`, and falls back gracefully to `wearable_dynamic` or `static` during bootstrap or low adherence.
 
 ### Macro & Fiber Allocation & Safety Guardrails
 - Protein is anchored to `1.8–2.0 g/kg` body weight (or automatically anchored to **Lean Body Mass** at `2.0–2.2 g/kg LBM` when body fat exceeds `25%` male / `32%` female).
@@ -151,11 +158,11 @@ Every night at `23:55` (and whenever you log weight manually), the coordinator p
 
 ## 7. Daily Usage: Custom Lovelace Card
 
-In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.6` is registered automatically on startup.
+In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.3.0` is registered automatically on startup.
 
 1. Refresh your browser (`Ctrl+Shift+R` / clear mobile app cache once).
 2. Edit a dashboard → **+ Add Card** → search **HA Calories Buddy** (or add YAML `type: custom:ha-calories-buddy-card`).
-3. By default, the card detects the signed-in Home Assistant user (`hass.user.id`) and displays their personal diary (a person switcher dropdown appears automatically when multiple profiles exist, or you can pin `person_id` in the visual card editor).
+3. By default, the card detects the signed-in Home Assistant user (`hass.user.id`) and displays their personal diary (a person switcher dropdown appears automatically when multiple profiles exist, or you can pin `person_id` in the visual card editor). Use the 5 main tabs (**Today · Plan · Shop · Vault · Trends**) and the header **`⚙️`** icon button for **Preferences**.
 
 ### Card Features (`Today` Tab)
 - **Calorie Ring, Fiber Bar & Macro Split Pie Chart:** Live consumed vs. target `kcal`, Protein, Carbs, Fat, and **Fiber**, Remaining/Over-budget pill, TDEE pill, plus a compact **Macro Distribution Donut Chart** ($P \times 4$, $C \times 4$, $F \times 9$, $\text{Fiber} \times 2$) with a **Consumed / Target** toggle.
@@ -173,14 +180,19 @@ In standard Home Assistant Storage dashboards, `/ha_calories_buddy/frontend/ha-c
 - **Generate 1–7 Day Plan & Dynamic Plan ↔ Log Sync:** Create an active personalized meal plan with optional **Meal Prep Batch Mode** (batches repeated lunches/dinners to minimize cooking). Every meal is deterministically scaled by Python's bounded algebraic solver to within `±5%` of your daily target. When you log an off-plan meal manually or via Assist for a slot today without tapping *Log as Eaten*, Today's "Planned Remaining", Calendar (`📋`), and **Rebalance Today** automatically suppress/skip that covered slot, the **Plan** tab marks it `🔄 Replaced`, and generating a new plan from today skips already-logged slots automatically (while soft-deleting the off-plan log restores the planned slot cleanly).
 - **Interactive Daily Controls:** Expand ingredients & preparation steps, swap any single meal (`Swap`), click **Eaten (`✅`)** to promote a planned dish into today's `MealLog` in 1 tap (choosing `1.0x`, `0.75x`, `1.25x`, etc.), rate dishes (`Like`, `Dislike`, `Never Suggest`), or click **Rebalance Today** to adjust dinner/snacks after an unplanned meal (with multi-day smoothing option if over budget).
 
-### Two-Tier Dietary Profile (`Preferences` Tab)
+### Workouts, Shopping Draft & Trends (`Plan → Workouts`, `Shop`, `Trends` Tabs)
+- **Workouts (`Plan → Workouts` & Header Training Chip):** Toggle today between **Training** and **Rest** (or let Garmin Coach `calendar.*` + your weekly recurring Mon–Sun split drive it automatically). When `Target Mode = Manual` with Training Day macros set, toggling Training ON immediately updates `calories_target` and P/C/F/Fiber targets. Upcoming workouts also flow into the AI Meal Planner prompt.
+- **The Butler (`Shop` Tab):** Generate an aisle-grouped editable grocery draft across any date range (with optional multi-person **Merge household plans**), excluding already-logged meals, converting cooked recipe quantities back to raw purchase weights via `yield_factor`, converting whole eggs into `pcs`/`pz`, applying preferred brands, editing/unchecking items inline, and pushing to `todo.*` while skipping duplicate active items.
+- **Trends (`Trends` Tab):** Inspect `7 / 30 / 90 day` native SVG charts showing *Expected vs Actual* weight change + goal ETA, daily calories vs target, raw + EMA weight with **Body Fat %** and **Lean Mass kg** toggles, Adaptive TDEE trajectory, and macro/fiber adherence averages.
+
+### Two-Tier Dietary Profile (`⚙️ Preferences` View)
 - Manage **Global Household** rules (shared allergens/blacklist) and **Personal Overrides** (`allergy`, `intolerance`, `blacklist`, `dislike`, `like`, `love`, `preferred_brand`) enforced deterministically by HA Calories Buddy's Zero-Trust Hard-Constraint Gate before any AI plan reaches your calendar.
 
 ---
 
 ## 8. Daily Usage: Voice Logging & Planning with Home Assistant Assist
 
-HA Calories Buddy registers a native Home Assistant Assist `llm.API` (`HA Calories Buddy`) with seven tools:
+HA Calories Buddy registers a native Home Assistant Assist `llm.API` (`HA Calories Buddy`) with ten tools:
 1. `log_meal(text, meal_slot?, person?)`
 2. `correct_last_meal(item_name?, new_quantity?, new_unit?, new_state?, new_meal_slot?, replacement_food_name?, replacement_brand?, remove_item?, add_food_name?, add_brand?, add_quantity?, add_unit?, add_state?, target_meal_slot?, person?)`
 3. `get_today_nutrition_summary(person?)`
@@ -188,6 +200,9 @@ HA Calories Buddy registers a native Home Assistant Assist `llm.API` (`HA Calori
 5. `generate_meal_plan(num_days?, meal_prep_mode?, notes?, person?)`
 6. `swap_plan_meal(plan_item_id, instruction?, person?)`
 7. `rebalance_today(spread_days?, allow_llm_swap?, person?)`
+8. `manage_shopping_list(action, days?, include_household?, item_label?, quantity?, unit?, person?)`
+9. `get_nutrition_trends(days?, person?)`
+10. `manage_workouts(action, is_training_day?, person?)`
 
 ### Enabling Assist Tools
 1. Open **Settings → Voice assistants** and select your Assist pipeline / Conversation Agent (LLM-backed conversation integration).
@@ -230,21 +245,22 @@ Each Person Profile creates one `calendar` entity (`calendar.calories_buddy_<nam
 - `📋 [Plan - Slot] kcal — title` (upcoming planned meals with ingredients & macros in description)
 - `📊 consumed / target kcal | P / C / F / Fib` (all-day summary)
 
-### Exposed Sensors (10 per Person)
+### Exposed Entities (10 Sensors + 1 Calendar + 1 Switch per Person)
 All entities are grouped under a single device (`Calories Buddy — <Name>`):
 
-| Entity Suffix | Unit | Key Attributes |
+| Entity Suffix | Unit / Platform | Key Attributes |
 | :--- | :--- | :--- |
-| `_calories_consumed` | `kcal` | `meals_confirmed`, `by_slot` (includes `fiber_g`) |
-| `_calories_target` | `kcal` | `mode`, `goal_type`, `bmr_kcal`, `tdee_kcal`, `safety_warnings` |
-| `_calories_remaining` | `kcal` | — |
-| `_protein_consumed` | `g` | `target_g`, `remaining_g` |
-| `_carbs_consumed` | `g` | `target_g`, `remaining_g` |
-| `_fat_consumed` | `g` | `target_g`, `remaining_g` |
-| `_fiber_consumed` | `g` | `target_g`, `remaining_g` |
-| `_estimated_tdee` | `kcal` | `engine`, `bmr_kcal`, `bmr_formula`, `wearable_baseline_kcal`, `intraday_delta_kcal`, `fallback_to_static`, `days_used`, `weight_kg` |
-| `_pending_meal_confirmations` | count | Trigger automations whenever `state > 0` |
-| `_calorie_target_adherence` | `%` | — |
+| `_calories_consumed` | `kcal` (`sensor`) | `meals_confirmed`, `by_slot` (includes `fiber_g`) |
+| `_calories_target` | `kcal` (`sensor`) | `mode`, `goal_type`, `bmr_kcal`, `tdee_kcal`, `is_training_day`, `training_day_source`, `safety_warnings` |
+| `_calories_remaining` | `kcal` (`sensor`) | — |
+| `_protein_consumed` | `g` (`sensor`) | `target_g`, `remaining_g` |
+| `_carbs_consumed` | `g` (`sensor`) | `target_g`, `remaining_g` |
+| `_fat_consumed` | `g` (`sensor`) | `target_g`, `remaining_g` |
+| `_fiber_consumed` | `g` (`sensor`) | `target_g`, `remaining_g` |
+| `_estimated_tdee` | `kcal` (`sensor`) | `engine`, `bmr_kcal`, `bmr_formula`, `wearable_baseline_kcal`, `intraday_delta_kcal`, `fallback_to_static`, `fallback_engine`, `days_used`, `weight_kg`, `weight_ema_kg`, `body_fat_ema_pct`, `adaptive_tdee_kcal`, `wearable_multiplier`, `adaptive_confidence`, `adaptive_delta_kcal`, `adaptive_window_days`, `logged_days_in_window`, `weigh_ins_in_window`, `two_compartment_used` |
+| `_pending_meal_confirmations` | count (`sensor`) | Trigger automations whenever `state > 0` |
+| `_calorie_target_adherence` | `%` (`sensor`) | — |
+| `_training_day` | on/off (`switch`) | `source`, `scheduled_workouts`, `calendar_workouts`, `training_targets_active` |
 
 ### Example Automation (Pending Confirmation Alert)
 
@@ -289,6 +305,10 @@ All services support optional response data (`SupportsResponse.OPTIONAL`) and re
 | `ha_calories_buddy.set_preference` | `scope` (req), `target_type` (req), `target_value` (req), `stance` (req), `notes`, `person` | Add/update global or personal preference, dislike, or allergen. |
 | `ha_calories_buddy.save_recipe` | `name` (req), `ingredients` (req), `servings`, `serving_unit`, `final_weight_g`, `category`, `allow_in_planner`, `notes`, `recipe_id`, `person` | Create/update a homemade composite recipe and sync its verified Food Vault item. |
 | `ha_calories_buddy.delete_recipe` | `recipe_id` (req), `person` | Delete a homemade recipe and linked Vault food while preserving logged meal snapshots. |
+| `ha_calories_buddy.create_shopping_draft` | `start_date`, `end_date`, `include_household`, `person` | Aggregate unconsumed planned meals into an editable aisle-sorted grocery draft. |
+| `ha_calories_buddy.commit_shopping_draft` | `draft_id`, `todo_entity`, `person` | Push checked items from the active draft to HA `todo.*` skipping duplicates. |
+| `ha_calories_buddy.set_training_day` | `is_training_day`, `date`, `clear_override`, `person` | Override today's Training/Rest Day status or restore auto schedule/calendar sync. |
+| `ha_calories_buddy.save_workout_schedule` | `weekday` (req), `title` (req), `activity_type`, `duration_min`, `estimated_kcal`, `time_of_day`, `notes`, `enabled`, `schedule_id`, `person` | Create or update a recurring weekly workout slot (`0=Mon`..`6=Sun`). |
 
 Example YAML service call:
 
@@ -313,7 +333,7 @@ If your Home Assistant uses `lovelace: mode: yaml` instead of UI storage mode, a
 lovelace:
   mode: yaml
   resources:
-    - url: /ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.6
+    - url: /ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.3.0
       type: module
 ```
 
@@ -331,7 +351,7 @@ title: Calories Buddy
 ## 13. Troubleshooting & FAQ
 
 - **Custom Card shows "Custom element doesn't exist: ha-calories-buddy-card":**  
-  Hard-refresh your browser (`Ctrl+Shift+R`) or clear cache in the Home Assistant Companion app. Confirm under **Settings → Dashboards → Resources** that `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.2.6` is listed (if using YAML mode, follow [Section 12](#12-lovelace-yaml-mode-setup)).
+  Hard-refresh your browser (`Ctrl+Shift+R`) or clear cache in the Home Assistant Companion app. Confirm under **Settings → Dashboards → Resources** that `/ha_calories_buddy/frontend/ha-calories-buddy-card.js?v=0.3.0` is listed (if using YAML mode, follow [Section 12](#12-lovelace-yaml-mode-setup)).
 - **Camera barcode scanner button is disabled:**  
   Live camera scanning requires HTTPS (or `localhost`) plus browser `BarcodeDetector` support (Chromium/Android WebView; iOS Safari lacks native `BarcodeDetector`). Type or paste the EAN digits directly into the manual lookup input—it works everywhere.
 - **Voice logging from a shared smart speaker returns an ambiguity error:**  

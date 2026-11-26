@@ -35,6 +35,9 @@ from custom_components.ha_calories_buddy.core.planner.preferences import (
 from custom_components.ha_calories_buddy.core.planner.rebalancer import (
     MealRebalancerService,
 )
+from custom_components.ha_calories_buddy.core.planner.shopping import (
+    ShoppingListService,
+)
 from custom_components.ha_calories_buddy.core.storage.database import Database
 from custom_components.ha_calories_buddy.core.storage.food_repo import FoodRepository
 from custom_components.ha_calories_buddy.core.storage.meal_repo import MealRepository
@@ -46,6 +49,12 @@ from custom_components.ha_calories_buddy.core.storage.preference_repo import (
 )
 from custom_components.ha_calories_buddy.core.storage.profile_repo import ProfileRepository
 from custom_components.ha_calories_buddy.core.storage.recipe_repo import RecipeRepository
+from custom_components.ha_calories_buddy.core.storage.shopping_repo import (
+    ShoppingRepository,
+)
+from custom_components.ha_calories_buddy.core.storage.workout_repo import (
+    WorkoutRepository,
+)
 from custom_components.ha_calories_buddy.ha_llm_client import HAAITaskLLMClient
 
 if TYPE_CHECKING:
@@ -88,6 +97,8 @@ class DomainRuntime:
     preference_repo: PreferenceRepository
     plan_repo: MealPlanRepository
     recipe_repo: RecipeRepository
+    shopping_repo: ShoppingRepository
+    workout_repo: WorkoutRepository
     preference_engine: PreferenceEngine
     session: aiohttp.ClientSession
     off_provider: OpenFoodFactsProvider
@@ -97,12 +108,14 @@ class DomainRuntime:
     planner_service: MealPlannerService
     rebalancer_service: MealRebalancerService
     recipe_service: RecipeService
+    shopping_service: ShoppingListService
     hub: HubRuntimeData | None = None
     persons: dict[str, PersonRuntimeData] = field(default_factory=dict)
     frontend_registered: bool = False
     services_registered: bool = False
     ws_registered: bool = False
     llm_api_unsub: Callable[[], None] | None = None
+    notify_action_unsub: Callable[[], None] | None = None
     stop_unsub: Callable[[], None] | None = None
 
     def get_effective_llm_config(self, profile: PersonProfile) -> LLMConfig:
@@ -173,4 +186,11 @@ class DomainRuntime:
             food_repo=self.food_repo,
             resolver=self.resolver,
             llm_client_getter=self.get_effective_llm_client,
+        )
+        self.shopping_service = ShoppingListService(
+            plan_repo=self.plan_repo,
+            meal_repo=self.meal_repo,
+            food_repo=self.food_repo,
+            shopping_repo=self.shopping_repo,
+            preference_engine=self.preference_engine,
         )

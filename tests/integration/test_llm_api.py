@@ -65,6 +65,9 @@ async def test_assist_llm_api_tools(hass: HomeAssistant) -> None:
         "generate_meal_plan",
         "swap_plan_meal",
         "rebalance_today",
+        "manage_shopping_list",
+        "get_nutrition_trends",
+        "manage_workouts",
     }
 
     parsed_lunch = json.dumps(

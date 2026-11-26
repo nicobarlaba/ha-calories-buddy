@@ -260,6 +260,10 @@ def _format_preference_block(
             + ", ".join(ctx.recent_meals_last_7d[:8])
             + "."
         )
+    if ctx.global_baseline_notes.strip():
+        parts.append(
+            f"Household food baseline notes: {ctx.global_baseline_notes.strip()}."
+        )
     return "\n".join(parts)
 
 
@@ -273,6 +277,7 @@ def build_suggest_meal_prompts(
     user_hint: str = "",
     count: int = 3,
     vault_catalog_hint: str = "",
+    workout_context: str = "",
 ) -> tuple[str, str]:
     """Build prompts asking the Chef LLM for 1-3 tailored meal options."""
     slot_group = canonical_slot_group(meal_slot)
@@ -375,12 +380,17 @@ def build_suggest_meal_prompts(
         f"{vault_section}"
     )
     hint_line = f"\nUser request/hint: {user_hint.strip()}" if user_hint.strip() else ""
+    workout_line = (
+        f"\nWorkout schedule context:\n{workout_context.strip()}"
+        if workout_context.strip()
+        else ""
+    )
     user_prompt = (
         f"Propose {count} distinct alternative meal options for meal_slot='{meal_slot}'.\n"
         f"Each individual option should target approx: {round(target_macros.kcal)} kcal | "
         f"P {round(target_macros.protein_g)}g | C {round(target_macros.carbs_g)}g | "
         f"F {round(target_macros.fat_g)}g.\n"
-        f"Maximum cooking time per option: {max_cook_minutes} minutes.{hint_line}"
+        f"Maximum cooking time per option: {max_cook_minutes} minutes.{hint_line}{workout_line}"
     )
     return system_prompt, user_prompt
 
@@ -395,6 +405,7 @@ def build_day_plan_prompts(
     options: PlanGenerationOptions,
     previous_titles: list[str] | None = None,
     vault_catalog_hint: str = "",
+    workout_context: str = "",
 ) -> tuple[str, str]:
     """Build prompts to generate one complete day's meals respecting per-slot budgets."""
     wants_savory_snacks = is_savory_hint(options.notes)
@@ -465,12 +476,18 @@ def build_day_plan_prompts(
         if options.meal_prep_mode
         else ""
     )
+    workout_line = (
+        f"\nWorkout schedule context (adjust carb/protein timing accordingly):\n{workout_context.strip()}"
+        if workout_context.strip()
+        else ""
+    )
     user_prompt = (
         f"Plan date: {plan_date_str}\nMeal slots & macro targets:\n"
         + "\n".join(slot_lines)
         + prep_line
         + avoid_line
         + notes_line
+        + workout_line
     )
     return system_prompt, user_prompt
 

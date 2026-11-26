@@ -14,6 +14,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from custom_components.ha_calories_buddy.const import (
     CONF_ACTIVE_KCAL_ENTITY,
+    CONF_ACTIVITIES_ENTITY,
     CONF_ACTIVITY_LEVEL,
     CONF_AI_TASK_ENTITY,
     CONF_ALLERGIES,
@@ -53,7 +54,9 @@ from custom_components.ha_calories_buddy.const import (
     CONF_PERSON_ID,
     CONF_SEX,
     CONF_STEPS_ENTITY,
+    CONF_TARGET_BODY_FAT_PCT,
     CONF_TARGET_MODE,
+    CONF_TARGET_WEIGHT_KG,
     CONF_TDEE_ENGINE,
     CONF_TODO_ENTITY,
     CONF_TOTAL_KCAL_ENTITY,
@@ -61,6 +64,7 @@ from custom_components.ha_calories_buddy.const import (
     CONF_WEARABLE_CORRECTION_FACTOR,
     CONF_WEEKLY_RATE_KG,
     CONF_WEIGHT_ENTITY,
+    CONF_WORKOUT_CALENDAR_ENTITY,
     DEFAULT_LANGUAGE,
     DEFAULT_LLM_TIMEOUT_CLOUD_S,
     DEFAULT_LLM_TIMEOUT_LOCAL_S,
@@ -407,6 +411,30 @@ def _biometrics_schema(defaults: dict[str, Any]) -> vol.Schema:
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
+            vol.Optional(
+                CONF_TARGET_WEIGHT_KG,
+                description={"suggested_value": defaults.get(CONF_TARGET_WEIGHT_KG)},
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=25.0,
+                    max=350.0,
+                    step=0.1,
+                    unit_of_measurement="kg",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_TARGET_BODY_FAT_PCT,
+                description={"suggested_value": defaults.get(CONF_TARGET_BODY_FAT_PCT)},
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=3.0,
+                    max=65.0,
+                    step=0.1,
+                    unit_of_measurement="%",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
             vol.Required(
                 CONF_TDEE_ENGINE,
                 default=defaults.get(CONF_TDEE_ENGINE, TDEEEngineType.STATIC.value),
@@ -415,6 +443,7 @@ def _biometrics_schema(defaults: dict[str, Any]) -> vol.Schema:
                     options=[
                         TDEEEngineType.STATIC.value,
                         TDEEEngineType.WEARABLE_DYNAMIC.value,
+                        TDEEEngineType.ADAPTIVE.value,
                     ],
                     translation_key="tdee_engine",
                     mode=selector.SelectSelectorMode.DROPDOWN,
@@ -562,6 +591,18 @@ def _entities_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_STEPS_ENTITY,
                 description={"suggested_value": defaults.get(CONF_STEPS_ENTITY)},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(
+                CONF_WORKOUT_CALENDAR_ENTITY,
+                description={"suggested_value": defaults.get(CONF_WORKOUT_CALENDAR_ENTITY)},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="calendar")
+            ),
+            vol.Optional(
+                CONF_ACTIVITIES_ENTITY,
+                description={"suggested_value": defaults.get(CONF_ACTIVITIES_ENTITY)},
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),

@@ -30,14 +30,32 @@ def test_frontend_bundle_files_and_exports_exist() -> None:
         "components/barcode-decoder.js",
         "components/barcode-scanner.js",
         "views/today-view.js",
+        "views/plan-view.js",
+        "views/shopping-view.js",
+        "views/workouts-subview.js",
+        "views/trends-view.js",
         "views/vault-view.js",
         "views/recipes-subview.js",
+        "views/preferences-view.js",
     ]
     for rel in expected_files:
         path = Path(FRONTEND_DIR) / rel
         assert path.is_file(), f"Missing frontend module: {path}"
         content = path.read_text(encoding="utf-8")
         assert len(content.strip()) > 0
+
+    brand_dir = Path(FRONTEND_DIR).parent / "brand"
+    for png in (
+        "icon.png",
+        "icon@2x.png",
+        "logo.png",
+        "logo@2x.png",
+        "dark_logo.png",
+        "dark_logo@2x.png",
+    ):
+        png_path = brand_dir / png
+        assert png_path.is_file(), f"Missing brand asset: {png_path}"
+        assert png_path.stat().st_size > 100
 
     entry_js = (Path(FRONTEND_DIR) / "ha-calories-buddy-card.js").read_text(
         encoding="utf-8"

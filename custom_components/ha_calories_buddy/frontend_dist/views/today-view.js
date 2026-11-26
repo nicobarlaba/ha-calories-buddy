@@ -401,11 +401,15 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
     </div>
 
     <div class="pills">
-      <span class="pill ${remainingKcal >= 0 ? "good" : "warn"}">
+      <span class="pill ${remainingKcal >= 0 ? "good" : "warn"} tabular">
         ${escapeHtml(remainingKcal >= 0 ? t(lang, "remaining") : t(lang, "over_budget"))}: <strong>${Math.abs(remainingKcal)} kcal</strong>
       </span>
-      <span class="pill">
+      <span class="pill tabular">
         ${escapeHtml(t(lang, "tdee"))}: <strong>${Math.round(tdee.tdee_kcal)} kcal</strong>
+        ${tdee.adaptive_confidence ? ` · ${escapeHtml(t(lang, `trends_conf_${tdee.adaptive_confidence}`) || tdee.adaptive_confidence)}` : ""}
+      </span>
+      <span class="pill ${dashboard.workouts?.is_training_day ? "good" : ""}">
+        ${dashboard.workouts?.is_training_day ? "🏋️" : "🧘"} ${escapeHtml(t(lang, dashboard.workouts?.is_training_day ? "training_day_badge" : "rest_day_badge"))}
       </span>
       ${(targets.safety_warnings || []).map((w) => `<span class="pill warn">⚠️ ${escapeHtml(w)}</span>`).join("")}
     </div>

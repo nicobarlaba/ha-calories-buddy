@@ -1,0 +1,35 @@
+name: "Tests & Quality"
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run Ruff lint
+        run: ruff check custom_components tests
+
+      - name: Run MyPy strict check on core
+        run: mypy custom_components/ha_calories_buddy/core
+
+      - name: Run Core & Integration tests
+        run: |
+          pytest tests/core --cov=custom_components/ha_calories_buddy/core --cov-report=term-missing
+          pytest tests/integration -v

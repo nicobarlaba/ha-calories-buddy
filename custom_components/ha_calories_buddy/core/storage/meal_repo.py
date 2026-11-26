@@ -605,6 +605,44 @@ class MealRepository:
                 categories.append(cat)
         return food_names, categories
 
+    async def get_daily_macros_range(
+        self,
+        person_id: str,
+        start_date: date,
+        end_date: date,
+    ) -> dict[date, Macros]:
+        """Aggregate confirmed daily macros across an inclusive range in a single SQL query."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT log_date,
+                   SUM(total_kcal) AS kcal,
+                   SUM(total_protein) AS protein,
+                   SUM(total_carbs) AS carbs,
+                   SUM(total_fat) AS fat,
+                   SUM(COALESCE(total_fiber, 0.0)) AS fiber
+            FROM meal_logs
+            WHERE person_id = ? AND log_date >= ? AND log_date <= ? AND status = ?
+            GROUP BY log_date
+            ORDER BY log_date ASC
+            """,
+            (
+                person_id,
+                start_date.isoformat(),
+                end_date.isoformat(),
+                MealStatus.CONFIRMED.value,
+            ),
+        )
+        return {
+            date.fromisoformat(str(row["log_date"])): Macros(
+                kcal=round(float(row["kcal"] or 0.0), 1),
+                protein_g=round(float(row["protein"] or 0.0), 1),
+                carbs_g=round(float(row["carbs"] or 0.0), 1),
+                fat_g=round(float(row["fat"] or 0.0), 1),
+                fiber_g=round(float(row["fiber"] or 0.0), 1),
+            )
+            for row in rows
+        }
+
     async def _get_items_for_logs(
         self, log_ids: list[str]
     ) -> dict[str, list[MealLogItem]]:

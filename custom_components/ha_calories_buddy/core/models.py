@@ -237,7 +237,7 @@ class MealSlotConfig(BaseModel):
 
 
 class EntityMappings(BaseModel):
-    """Home Assistant entity mappings for biophysical sensors, todo, and notify."""
+    """Home Assistant entity mappings for biophysical sensors, workouts, todo, and notify."""
 
     weight_entity: str | None = None
     body_fat_entity: str | None = None
@@ -246,6 +246,8 @@ class EntityMappings(BaseModel):
     steps_entity: str | None = None
     todo_entity: str | None = None
     notify_service: str | None = None
+    workout_calendar_entity: str | None = None
+    activities_entity: str | None = None
 
 
 class ManualMacroTarget(BaseModel):
@@ -375,11 +377,14 @@ class BiometricSnapshot(BaseModel):
     weight_kg: float | None = Field(default=None, gt=20.0, lt=400.0)
     weight_ema_kg: float | None = Field(default=None, gt=20.0, lt=400.0)
     body_fat_pct: float | None = Field(default=None, ge=3.0, le=65.0)
+    body_fat_ema_pct: float | None = Field(default=None, ge=3.0, le=65.0)
     active_kcal: float | None = Field(default=None, ge=0.0)
     total_kcal: float | None = Field(default=None, ge=0.0)
     steps: int | None = Field(default=None, ge=0)
     computed_tdee: float | None = Field(default=None, ge=0.0)
     target_kcal: float | None = Field(default=None, ge=0.0)
+    adaptive_tdee_kcal: float | None = Field(default=None, ge=0.0)
+    wearable_multiplier_used: float | None = Field(default=None, gt=0.3, le=1.5)
 
 
 # Phase 2 / Phase 3 forward-compatible domain models
@@ -517,21 +522,178 @@ class ShoppingDraftItem(BaseModel):
     draft_id: str
     food_id: str | None = None
     label: str
+    brand: str | None = None
     quantity: float = Field(gt=0.0)
     unit: str = "g"
     category: str = "other"
+    aisle: str = "other"
     checked: bool = True
+    source_meals: list[str] = Field(default_factory=list)
 
 
 class ShoppingDraft(BaseModel):
-    """Aggregated editable grocery draft linked to a MealPlan."""
+    """Aggregated editable grocery draft linked to one or more MealPlans."""
 
     draft_id: str
     person_id: str
     plan_id: str | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    scope_person_ids: list[str] = Field(default_factory=list)
     status: str = "draft"
     created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     items: list[ShoppingDraftItem] = Field(default_factory=list)
+
+
+class WorkoutActivityType(StrEnum):
+    """Supported recurring workout discipline classifications."""
+
+    STRENGTH = "strength"
+    CARDIO = "cardio"
+    RUNNING = "running"
+    CYCLING = "cycling"
+    HIIT = "hiit"
+    MOBILITY = "mobility"
+    SPORT = "sport"
+    OTHER = "other"
+
+
+class WorkoutScheduleItem(BaseModel):
+    """Recurring weekly workout entry (weekday 0=Monday .. 6=Sunday)."""
+
+    schedule_id: str
+    person_id: str
+    weekday: int = Field(ge=0, le=6)
+    title: str
+    activity_type: WorkoutActivityType = WorkoutActivityType.STRENGTH
+    duration_min: int = Field(default=60, ge=5, le=480)
+    estimated_kcal: float | None = Field(default=None, ge=0.0)
+    time_of_day: str = "18:00"
+    notes: str = ""
+    enabled: bool = True
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class TrainingDayOverride(BaseModel):
+    """Manual or explicit per-date override for training-day status."""
+
+    person_id: str
+    override_date: date
+    is_training_day: bool
+    source: str = "manual"
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class CompletedActivity(BaseModel):
+    """Completed workout activity read from mapped Garmin/wearable sensor."""
+
+    activity_id: str = ""
+    name: str
+    activity_type: str = "other"
+    start_time: str | None = None
+    duration_min: float | None = None
+    calories: float | None = None
+    distance_km: float | None = None
+
+
+class ScheduledCalendarWorkout(BaseModel):
+    """Scheduled future workout read from mapped Home Assistant calendar.* entity."""
+
+    summary: str
+    start: str
+    end: str | None = None
+    description: str = ""
+
+
+class AdaptiveState(BaseModel):
+    """Persisted closed-loop Adaptive TDEE state per person."""
+
+    person_id: str
+    last_calibrated_date: date | None = None
+    adaptive_tdee_kcal: float | None = None
+    wearable_multiplier: float = Field(default=1.0, gt=0.3, le=1.5)
+    confidence: str = "bootstrapping"
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class TrendPoint(BaseModel):
+    """Single day telemetry point for Trends charts and analytics."""
+
+    point_date: date
+    kcal_consumed: float = 0.0
+    kcal_target: float | None = None
+    protein_g: float = 0.0
+    carbs_g: float = 0.0
+    fat_g: float = 0.0
+    fiber_g: float = 0.0
+    weight_kg: float | None = None
+    weight_ema_kg: float | None = None
+    body_fat_pct: float | None = None
+    body_fat_ema_pct: float | None = None
+    lean_mass_kg: float | None = None
+    tdee_kcal: float | None = None
+    steps: int | None = None
+    adherence_pct: float | None = None
+    is_logged: bool = False
+
+
+class ExpectedVsActualSummary(BaseModel):
+    """Goal pace comparison and ETA projection based on weight EMA."""
+
+    expected_weekly_rate_kg: float
+    actual_weekly_rate_kg: float | None = None
+    status: str = "insufficient_data"
+    current_weight_ema_kg: float | None = None
+    target_weight_kg: float | None = None
+    current_body_fat_ema_pct: float | None = None
+    target_body_fat_pct: float | None = None
+    eta_date: date | None = None
+    eta_weeks: float | None = None
+
+
+class WeeklyAdherenceBucket(BaseModel):
+    """7-day adherence rollup bucket."""
+
+    week_start: date
+    week_end: date
+    logged_days: int
+    total_days: int
+    avg_kcal: float
+    avg_target_kcal: float
+    adherence_pct: float
+
+
+class TrendsSummary(BaseModel):
+    """Complete 7/30/90d nutrition, body composition, and TDEE trends response."""
+
+    person_id: str
+    days: int
+    start_date: date
+    end_date: date
+    points: list[TrendPoint]
+    expected_vs_actual: ExpectedVsActualSummary
+    logged_days: int
+    total_days: int
+    logging_adherence_pct: float
+    avg_kcal: float
+    avg_target_kcal: float
+    kcal_adherence_pct: float
+    avg_protein_g: float
+    avg_carbs_g: float
+    avg_fat_g: float
+    avg_fiber_g: float
+    target_protein_g: float
+    target_carbs_g: float
+    target_fat_g: float
+    target_fiber_g: float
+    engine_used: str
+    adaptive_confidence: str | None = None
+    wearable_multiplier: float | None = None
+    adaptive_tdee_kcal: float | None = None
+    two_compartment_used: bool = False
+    fallback_engine: str | None = None
+    weekly_adherence: list[WeeklyAdherenceBucket] = Field(default_factory=list)
 
 
 class RecipeIngredientInput(BaseModel):

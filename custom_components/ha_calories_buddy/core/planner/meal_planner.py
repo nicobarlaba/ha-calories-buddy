@@ -192,6 +192,7 @@ class MealPlannerService:
         count: int = 3,
         reference_date: date | None = None,
         budget_mode: str = "auto",
+        workout_context: str = "",
     ) -> list[MealSuggestion]:
         """Generate 1-3 constraint-verified, macro-scaled meal suggestions on demand."""
         llm_client = self._require_llm(profile)
@@ -220,6 +221,7 @@ class MealPlannerService:
             user_hint=user_hint,
             count=requested_count,
             vault_catalog_hint=vault_hint,
+            workout_context=workout_context,
         )
 
         resolve_cache: dict[tuple[str, str, PreparationState], EffectiveFood | None] = {}
@@ -329,6 +331,7 @@ class MealPlannerService:
         daily_targets: TargetResult,
         options: PlanGenerationOptions,
         reference_today: date | None = None,
+        workout_context: str = "",
     ) -> MealPlan:
         """Generate a 1-7 day meal plan day-by-day with safety & <=5% macro scaling."""
         llm_client = self._require_llm(profile)
@@ -473,6 +476,7 @@ class MealPlannerService:
                 options=options,
                 previous_titles=generated_titles,
                 vault_catalog_hint=vault_hint,
+                workout_context=workout_context,
             )
 
             day_resolved = await self._generate_safe_day(

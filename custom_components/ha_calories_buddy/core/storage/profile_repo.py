@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 import aiosqlite
 
 from custom_components.ha_calories_buddy.core.models import (
+    AdaptiveState,
     BiometricSnapshot,
     PersonProfile,
     PreferenceEntry,
@@ -112,18 +113,21 @@ class ProfileRepository:
                 """
                 INSERT INTO biometric_snapshots (
                     snapshot_id, person_id, snap_date, weight_kg, weight_ema_kg,
-                    body_fat_pct, active_kcal, total_kcal, steps,
-                    computed_tdee, target_kcal
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    body_fat_pct, body_fat_ema_pct, active_kcal, total_kcal, steps,
+                    computed_tdee, target_kcal, adaptive_tdee_kcal, wearable_multiplier_used
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(person_id, snap_date) DO UPDATE SET
                     weight_kg = COALESCE(excluded.weight_kg, biometric_snapshots.weight_kg),
                     weight_ema_kg = COALESCE(excluded.weight_ema_kg, biometric_snapshots.weight_ema_kg),
                     body_fat_pct = COALESCE(excluded.body_fat_pct, biometric_snapshots.body_fat_pct),
+                    body_fat_ema_pct = COALESCE(excluded.body_fat_ema_pct, biometric_snapshots.body_fat_ema_pct),
                     active_kcal = COALESCE(excluded.active_kcal, biometric_snapshots.active_kcal),
                     total_kcal = COALESCE(excluded.total_kcal, biometric_snapshots.total_kcal),
                     steps = COALESCE(excluded.steps, biometric_snapshots.steps),
                     computed_tdee = COALESCE(excluded.computed_tdee, biometric_snapshots.computed_tdee),
-                    target_kcal = COALESCE(excluded.target_kcal, biometric_snapshots.target_kcal)
+                    target_kcal = COALESCE(excluded.target_kcal, biometric_snapshots.target_kcal),
+                    adaptive_tdee_kcal = COALESCE(excluded.adaptive_tdee_kcal, biometric_snapshots.adaptive_tdee_kcal),
+                    wearable_multiplier_used = COALESCE(excluded.wearable_multiplier_used, biometric_snapshots.wearable_multiplier_used)
                 """,
                 (
                     snapshot.snapshot_id,
@@ -132,14 +136,89 @@ class ProfileRepository:
                     snapshot.weight_kg,
                     snapshot.weight_ema_kg,
                     snapshot.body_fat_pct,
+                    snapshot.body_fat_ema_pct,
                     snapshot.active_kcal,
                     snapshot.total_kcal,
                     snapshot.steps,
                     snapshot.computed_tdee,
                     snapshot.target_kcal,
+                    snapshot.adaptive_tdee_kcal,
+                    snapshot.wearable_multiplier_used,
                 ),
             )
         return snapshot
+
+    async def get_biometric_snapshots_range(
+        self,
+        person_id: str,
+        start_date: date,
+        end_date: date,
+    ) -> list[BiometricSnapshot]:
+        """Return biometric snapshots across an inclusive date range."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT * FROM biometric_snapshots
+            WHERE person_id = ? AND snap_date >= ? AND snap_date <= ?
+            ORDER BY snap_date ASC
+            """,
+            (person_id, start_date.isoformat(), end_date.isoformat()),
+        )
+        return [self._row_to_snapshot(row) for row in rows]
+
+    async def get_adaptive_state(self, person_id: str) -> AdaptiveState | None:
+        """Fetch persisted closed-loop Adaptive TDEE state for a person."""
+        row = await self._db.fetch_one(
+            "SELECT * FROM adaptive_state WHERE person_id = ?",
+            (person_id,),
+        )
+        if row is None:
+            return None
+        return AdaptiveState(
+            person_id=str(row["person_id"]),
+            last_calibrated_date=(
+                date.fromisoformat(row["last_calibrated_date"])
+                if row["last_calibrated_date"]
+                else None
+            ),
+            adaptive_tdee_kcal=(
+                float(row["adaptive_tdee_kcal"])
+                if row["adaptive_tdee_kcal"] is not None
+                else None
+            ),
+            wearable_multiplier=float(row["wearable_multiplier"]),
+            confidence=str(row["confidence"] or "bootstrapping"),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    async def upsert_adaptive_state(self, state: AdaptiveState) -> AdaptiveState:
+        """Insert or update persisted Adaptive TDEE state for a person."""
+        now_iso = datetime.now(UTC).isoformat()
+        async with self._db.transaction() as conn:
+            await conn.execute(
+                """
+                INSERT INTO adaptive_state (
+                    person_id, last_calibrated_date, adaptive_tdee_kcal,
+                    wearable_multiplier, confidence, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(person_id) DO UPDATE SET
+                    last_calibrated_date = excluded.last_calibrated_date,
+                    adaptive_tdee_kcal = excluded.adaptive_tdee_kcal,
+                    wearable_multiplier = excluded.wearable_multiplier,
+                    confidence = excluded.confidence,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    state.person_id,
+                    state.last_calibrated_date.isoformat()
+                    if state.last_calibrated_date
+                    else None,
+                    state.adaptive_tdee_kcal,
+                    state.wearable_multiplier,
+                    state.confidence,
+                    now_iso,
+                ),
+            )
+        return state
 
     async def get_latest_biometric_snapshot(
         self, person_id: str
@@ -258,6 +337,7 @@ class ProfileRepository:
 
     @staticmethod
     def _row_to_snapshot(row: aiosqlite.Row) -> BiometricSnapshot:
+        keys = row.keys()
         return BiometricSnapshot(
             snapshot_id=row["snapshot_id"],
             person_id=row["person_id"],
@@ -275,6 +355,11 @@ class ProfileRepository:
                 if row["body_fat_pct"] is not None
                 else None
             ),
+            body_fat_ema_pct=(
+                float(row["body_fat_ema_pct"])
+                if "body_fat_ema_pct" in keys and row["body_fat_ema_pct"] is not None
+                else None
+            ),
             active_kcal=(
                 float(row["active_kcal"]) if row["active_kcal"] is not None else None
             ),
@@ -289,6 +374,18 @@ class ProfileRepository:
             ),
             target_kcal=(
                 float(row["target_kcal"]) if row["target_kcal"] is not None else None
+            ),
+            adaptive_tdee_kcal=(
+                float(row["adaptive_tdee_kcal"])
+                if "adaptive_tdee_kcal" in keys
+                and row["adaptive_tdee_kcal"] is not None
+                else None
+            ),
+            wearable_multiplier_used=(
+                float(row["wearable_multiplier_used"])
+                if "wearable_multiplier_used" in keys
+                and row["wearable_multiplier_used"] is not None
+                else None
             ),
         )
 

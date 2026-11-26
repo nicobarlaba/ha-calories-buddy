@@ -44,6 +44,8 @@
           "target_mode": "Target Mode",
           "goal_type": "Goal",
           "weekly_rate_kg": "Weekly Weight Change Rate (+ gain / - loss)",
+          "target_weight_kg": "Target Weight (optional, for Trends ETA)",
+          "target_body_fat_pct": "Target Body Fat % (optional)",
           "tdee_engine": "TDEE Calculation Engine",
           "activity_level": "Baseline Activity Level (PAL)",
           "wearable_correction_factor": "Wearable Calorie Correction Factor (e.g. 0.85 - 1.0)"
@@ -74,6 +76,8 @@
           "active_kcal_entity": "Active Calories Burned Sensor (e.g. Garmin)",
           "total_kcal_entity": "Total Calories Burned Sensor (e.g. Garmin)",
           "steps_entity": "Daily Steps Sensor",
+          "workout_calendar_entity": "Workout Schedule Calendar (optional, e.g. Garmin Coach)",
+          "activities_entity": "Completed Activities Sensor (optional, e.g. Garmin)",
           "todo_entity": "Shopping List (todo.*)",
           "notify_service": "Notification Service (e.g. notify.mobile_app_phone)"
         }
@@ -156,6 +160,8 @@
           "target_mode": "Target Mode",
           "goal_type": "Goal",
           "weekly_rate_kg": "Weekly Weight Change Rate",
+          "target_weight_kg": "Target Weight (optional)",
+          "target_body_fat_pct": "Target Body Fat % (optional)",
           "tdee_engine": "TDEE Calculation Engine",
           "activity_level": "Baseline Activity Level (PAL)",
           "wearable_correction_factor": "Wearable Correction Factor"
@@ -184,6 +190,8 @@
           "active_kcal_entity": "Active Calories Sensor",
           "total_kcal_entity": "Total Calories Sensor",
           "steps_entity": "Daily Steps Sensor",
+          "workout_calendar_entity": "Workout Schedule Calendar (optional, e.g. Garmin Coach)",
+          "activities_entity": "Completed Activities Sensor (optional, e.g. Garmin)",
           "todo_entity": "Shopping List (todo.*)",
           "notify_service": "Notification Service"
         }
@@ -265,7 +273,8 @@
     "tdee_engine": {
       "options": {
         "static": "Static Profile (BMR x PAL)",
-        "wearable_dynamic": "Wearable-Dynamic (7-day rolling baseline)"
+        "wearable_dynamic": "Wearable-Dynamic (7-day rolling baseline)",
+        "adaptive": "Adaptive Closed-Loop (EMA Weight/BF Calibration)"
       }
     },
     "activity_level": {
@@ -303,6 +312,9 @@
     },
     "calendar": {
       "nutrition": { "name": "Nutrition Diary & Plan" }
+    },
+    "switch": {
+      "training_day": { "name": "Training Day" }
     }
   }
 }

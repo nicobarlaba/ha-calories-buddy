@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import date, timedelta
 from typing import Any
 
@@ -27,7 +26,6 @@ from custom_components.ha_calories_buddy.const import (
     ATTR_WEIGHT_KG,
     DOMAIN,
 )
-from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
     MealStatus,
     PersonProfile,
@@ -35,6 +33,9 @@ from custom_components.ha_calories_buddy.core.models import (
     PreferenceScope,
     PreferenceStance,
     PreparationState,
+    TrainingDayOverride,
+    WorkoutActivityType,
+    WorkoutScheduleItem,
 )
 from custom_components.ha_calories_buddy.core.nutrition.recipes import (
     parse_recipe_ingredient_inputs,
@@ -52,37 +53,13 @@ from custom_components.ha_calories_buddy.identity import (
     PersonNotFoundError,
     resolve_person,
 )
+from custom_components.ha_calories_buddy.notifications import (
+    async_send_meal_notification,
+)
 from custom_components.ha_calories_buddy.runtime import DomainRuntime
-
-_LOGGER = get_logger(__name__)
-
-
-async def _maybe_notify(
-    hass: HomeAssistant,
-    profile: PersonProfile,
-    title: str,
-    message: str,
-) -> None:
-    svc = profile.entity_mappings.notify_service
-    if not svc or "." not in svc:
-        return
-    domain, service_name = svc.split(".", maxsplit=1)
-    if not hass.services.has_service(domain, service_name):
-        return
-    try:
-        await hass.services.async_call(
-            domain,
-            service_name,
-            {"title": title, "message": message},
-            blocking=False,
-        )
-    except Exception as exc:  # noqa: BLE001
-        log_event(
-            _LOGGER,
-            logging.WARNING,
-            "notify_dispatch_failed",
-            error_type=type(exc).__name__,
-        )
+from custom_components.ha_calories_buddy.shopping_bridge import (
+    async_commit_draft_to_todo,
+)
 
 
 def _resolve_target_person(
@@ -145,12 +122,13 @@ def async_register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(str(exc)) from exc
 
         await _refresh_person(hass, profile.person_id, "service_log_meal_text")
-        msg = (
-            f"{result.summary_message}\n" + " ".join(result.warnings)
-            if result.warnings
-            else result.summary_message
+        await async_send_meal_notification(
+            hass,
+            profile,
+            result.meal_log,
+            needs_confirmation=result.needs_confirmation,
+            warnings=result.warnings,
         )
-        await _maybe_notify(hass, profile, f"Calories Buddy — {profile.display_name}", msg)
         return {
             "summary": result.summary_message,
             "needs_confirmation": result.needs_confirmation,
@@ -327,6 +305,19 @@ def async_register_services(hass: HomeAssistant) -> None:
             set(totals.by_slot.keys()),
             budget_mode=budget_mode_arg,
         )
+        person_rt = runtime.persons.get(profile.person_id)
+        cal_map = (
+            person_rt.coordinator.data.calendar_workouts_by_date
+            if person_rt and person_rt.coordinator.data
+            else None
+        )
+        workout_ctx = await runtime.workout_repo.build_workout_prompt_context(
+            profile.person_id,
+            today,
+            1,
+            language=profile.language,
+            calendar_workouts_by_date=cal_map,
+        )
         try:
             suggestions = await runtime.planner_service.suggest_meal(
                 profile,
@@ -337,6 +328,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                 count=int(call.data.get("count", 3)),
                 reference_date=today,
                 budget_mode=mode_used,
+                workout_context=workout_ctx,
             )
         except Exception as exc:
             raise HomeAssistantError(str(exc)) from exc
@@ -361,6 +353,19 @@ def async_register_services(hass: HomeAssistant) -> None:
             meal_prep_mode=bool(call.data.get("meal_prep_mode", False)),
             notes=str(call.data.get("notes") or ""),
         )
+        person_rt = runtime.persons.get(profile.person_id)
+        cal_map = (
+            person_rt.coordinator.data.calendar_workouts_by_date
+            if person_rt and person_rt.coordinator.data
+            else None
+        )
+        workout_ctx = await runtime.workout_repo.build_workout_prompt_context(
+            profile.person_id,
+            start_d,
+            options.num_days,
+            language=profile.language,
+            calendar_workouts_by_date=cal_map,
+        )
         try:
             plan = await runtime.planner_service.generate_meal_plan(
                 profile,
@@ -368,6 +373,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                 daily_targets=targets,
                 options=options,
                 reference_today=dt_util.now().date(),
+                workout_context=workout_ctx,
             )
         except Exception as exc:
             raise HomeAssistantError(str(exc)) from exc
@@ -484,6 +490,97 @@ def async_register_services(hass: HomeAssistant) -> None:
         if deleted:
             await _refresh_person(hass, profile.person_id)
         return {"deleted": deleted}
+
+    async def handle_create_shopping_draft(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        today = dt_util.now().date()
+        start_d = (
+            date.fromisoformat(call.data["start_date"])
+            if call.data.get("start_date")
+            else today
+        )
+        end_d = (
+            date.fromisoformat(call.data["end_date"])
+            if call.data.get("end_date")
+            else start_d + timedelta(days=6)
+        )
+        include_household = bool(call.data.get("include_household", False))
+        profiles = (
+            [prt.profile for prt in runtime.persons.values()]
+            if include_household and runtime.persons
+            else [profile]
+        )
+        draft = await runtime.shopping_service.generate_draft(
+            profile, profiles, start_d, end_d
+        )
+        await _refresh_person(hass, profile.person_id, "service_create_shopping_draft")
+        return {"draft": draft.model_dump(mode="json")}
+
+    async def handle_commit_shopping_draft(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        return await async_commit_draft_to_todo(
+            hass,
+            runtime,
+            profile,
+            draft_id=call.data.get("draft_id") or None,
+            todo_entity_override=call.data.get("todo_entity") or None,
+        )
+
+    async def handle_set_training_day(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        target_d = (
+            date.fromisoformat(call.data[ATTR_DATE])
+            if call.data.get(ATTR_DATE)
+            else dt_util.now().date()
+        )
+        if bool(call.data.get("clear_override", False)):
+            cleared = await runtime.workout_repo.clear_override(
+                profile.person_id, target_d
+            )
+            await _refresh_person(hass, profile.person_id, "service_clear_training_day")
+            return {"date": target_d.isoformat(), "cleared": cleared}
+        is_train = bool(call.data.get("is_training_day", True))
+        ovr = await runtime.workout_repo.set_override(
+            TrainingDayOverride(
+                person_id=profile.person_id,
+                override_date=target_d,
+                is_training_day=is_train,
+                source="service",
+            )
+        )
+        await _refresh_person(hass, profile.person_id, "service_set_training_day")
+        return {"override": ovr.model_dump(mode="json")}
+
+    async def handle_save_workout_schedule(call: ServiceCall) -> dict[str, Any]:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_target_person(hass, call)
+        raw_type = str(call.data.get("activity_type", "strength")).strip().lower()
+        try:
+            act_type = WorkoutActivityType(raw_type)
+        except ValueError:
+            act_type = WorkoutActivityType.OTHER
+        item = WorkoutScheduleItem(
+            schedule_id=str(call.data.get("schedule_id") or ""),
+            person_id=profile.person_id,
+            weekday=max(0, min(6, int(call.data["weekday"]))),
+            title=str(call.data["title"]).strip(),
+            activity_type=act_type,
+            duration_min=max(5, min(480, int(call.data.get("duration_min", 60)))),
+            estimated_kcal=(
+                float(call.data["estimated_kcal"])
+                if call.data.get("estimated_kcal") is not None
+                else None
+            ),
+            time_of_day=str(call.data.get("time_of_day") or "18:00"),
+            notes=str(call.data.get("notes") or ""),
+            enabled=bool(call.data.get("enabled", True)),
+        )
+        saved = await runtime.workout_repo.upsert_schedule_item(item)
+        await _refresh_person(hass, profile.person_id, "service_save_workout_schedule")
+        return {"workout": saved.model_dump(mode="json")}
 
     hass.services.async_register(
         DOMAIN,
@@ -748,5 +845,64 @@ def async_register_services(hass: HomeAssistant) -> None:
         ),
         supports_response=SupportsResponse.OPTIONAL,
     )
-    # Keep timedelta import clean if needed later; explicitly avoid unused import
-    _ = timedelta
+    hass.services.async_register(
+        DOMAIN,
+        "create_shopping_draft",
+        handle_create_shopping_draft,
+        schema=vol.Schema(
+            {
+                vol.Optional("start_date"): cv.string,
+                vol.Optional("end_date"): cv.string,
+                vol.Optional("include_household", default=False): cv.boolean,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "commit_shopping_draft",
+        handle_commit_shopping_draft,
+        schema=vol.Schema(
+            {
+                vol.Optional("draft_id"): cv.string,
+                vol.Optional("todo_entity"): cv.entity_id,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "set_training_day",
+        handle_set_training_day,
+        schema=vol.Schema(
+            {
+                vol.Optional("is_training_day", default=True): cv.boolean,
+                vol.Optional(ATTR_DATE): cv.string,
+                vol.Optional("clear_override", default=False): cv.boolean,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "save_workout_schedule",
+        handle_save_workout_schedule,
+        schema=vol.Schema(
+            {
+                vol.Required("weekday"): vol.Coerce(int),
+                vol.Required("title"): cv.string,
+                vol.Optional("activity_type", default="strength"): cv.string,
+                vol.Optional("duration_min", default=60): vol.Coerce(int),
+                vol.Optional("estimated_kcal"): vol.Coerce(float),
+                vol.Optional("time_of_day", default="18:00"): cv.string,
+                vol.Optional("notes", default=""): cv.string,
+                vol.Optional("enabled", default=True): cv.boolean,
+                vol.Optional("schedule_id"): cv.string,
+                vol.Optional(ATTR_PERSON): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )

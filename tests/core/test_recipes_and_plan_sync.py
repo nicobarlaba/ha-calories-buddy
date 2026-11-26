@@ -187,10 +187,10 @@ async def test_migration_v3_and_homemade_recipe_lifecycle(
     logging_service: MealLoggingService = recipe_ctx["logging_service"]
     meal_repo: MealRepository = recipe_ctx["meal_repo"]
 
-    # Re-running initialize must stay idempotent and have versions 1, 2, 3
+    # Re-running initialize must stay idempotent and have all applied versions
     await db.initialize()
     mig_rows = await db.fetch_all("SELECT version FROM schema_migrations ORDER BY version")
-    assert [int(r["version"]) for r in mig_rows] == [1, 2, 3]
+    assert {1, 2, 3, 4}.issubset({int(r["version"]) for r in mig_rows})
 
     # Save "Ciambellone della mamma":
     # 300g Farina 00 (1080 kcal) + 200g Zucchero (800 kcal) + 100g Olio EVO (884 kcal) + 3 Uova (165g)

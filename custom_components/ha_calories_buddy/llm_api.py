@@ -1,10 +1,11 @@
-"""Home Assistant Assist llm.API tool registration (7 nutrition & planning tools)."""
+"""Home Assistant Assist llm.API tool registration (10 nutrition, shopping, workout & trends tools)."""
 
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 
 import probatio as vol
 from homeassistant.core import HomeAssistant
@@ -19,9 +20,18 @@ from custom_components.ha_calories_buddy.core.models import (
     PlanGenerationOptions,
     PlanItemStatus,
     PreparationState,
+    ShoppingDraft,
+    ShoppingDraftItem,
+    TrainingDayOverride,
+)
+from custom_components.ha_calories_buddy.core.physiology.trends import (
+    build_trends_summary,
 )
 from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
     compute_smart_slot_budget,
+)
+from custom_components.ha_calories_buddy.core.planner.shopping import (
+    aisle_for_category,
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     default_slots_for_language,
@@ -32,7 +42,13 @@ from custom_components.ha_calories_buddy.identity import (
     PersonNotFoundError,
     resolve_person,
 )
+from custom_components.ha_calories_buddy.notifications import (
+    async_send_meal_notification,
+)
 from custom_components.ha_calories_buddy.runtime import DomainRuntime
+from custom_components.ha_calories_buddy.shopping_bridge import (
+    async_commit_draft_to_todo,
+)
 
 _LOGGER = get_logger(__name__)
 
@@ -99,6 +115,13 @@ class LogMealTool(llm.Tool):
             return llm.ToolResult(data={"error": str(exc)}, error=True)
 
         await runtime.async_notify_person_updated(profile.person_id, "assist_log_meal")
+        await async_send_meal_notification(
+            hass,
+            profile,
+            result.meal_log,
+            needs_confirmation=result.needs_confirmation,
+            warnings=result.warnings,
+        )
 
         warnings_json: list[JsonValueType] = list(result.warnings)
         return llm.ToolResult(
@@ -531,6 +554,13 @@ class SuggestMealTool(llm.Tool):
                 set(totals.by_slot.keys()),
                 budget_mode=str(args.get("budget_mode") or "auto"),
             )
+            workout_ctx = await runtime.workout_repo.build_workout_prompt_context(
+                profile.person_id,
+                today,
+                1,
+                language=profile.language,
+                calendar_workouts_by_date=data.calendar_workouts_by_date,
+            )
             suggestions = await runtime.planner_service.suggest_meal(
                 profile,
                 meal_slot=slot_name,
@@ -540,6 +570,7 @@ class SuggestMealTool(llm.Tool):
                 count=3,
                 reference_date=today,
                 budget_mode=mode_used,
+                workout_context=workout_ctx,
             )
         except Exception as exc:  # noqa: BLE001
             return llm.ToolResult(data={"error": str(exc)}, error=True)
@@ -612,6 +643,13 @@ class GenerateMealPlanTool(llm.Tool):
                 return llm.ToolResult(data={"error": "Person state not ready"}, error=True)
             data = person_rt.coordinator.data
             num_days = max(1, min(7, int(args.get("num_days", 7))))
+            workout_ctx = await runtime.workout_repo.build_workout_prompt_context(
+                profile.person_id,
+                data.today,
+                num_days,
+                language=profile.language,
+                calendar_workouts_by_date=data.calendar_workouts_by_date,
+            )
             plan = await runtime.planner_service.generate_meal_plan(
                 profile,
                 start_date=data.today,
@@ -621,6 +659,7 @@ class GenerateMealPlanTool(llm.Tool):
                     meal_prep_mode=bool(args.get("meal_prep_mode", False)),
                     notes=str(args.get("notes") or ""),
                 ),
+                workout_context=workout_ctx,
             )
             await runtime.async_notify_person_updated(
                 profile.person_id, "assist_generate_plan"
@@ -795,8 +834,332 @@ class RebalanceTodayTool(llm.Tool):
         )
 
 
+class ManageShoppingListTool(llm.Tool):
+    """Assist tool to read, generate, edit, or push smart grocery lists to HA todo.*."""
+
+    name = "manage_shopping_list"
+    title = "Manage shopping list and HA todo sync"
+    description = (
+        "Read the current grocery draft (`get`), generate a fresh shopping list from "
+        "planned meals (`generate`), append a manual item (`add_item`), or push checked "
+        "items to the Home Assistant shopping list (`commit`)."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema(
+        {
+            vol.Required("action"): vol.In(["get", "generate", "commit", "add_item"]),
+            vol.Optional("days", default=7): vol.Coerce(int),
+            vol.Optional("include_household", default=False): bool,
+            vol.Optional("item_label"): str,
+            vol.Optional("quantity", default=1.0): vol.Coerce(float),
+            vol.Optional("unit", default="pcs"): str,
+            vol.Optional("person"): str,
+        }
+    )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> llm.ToolResult:
+        """Execute a shopping list workflow step via Assist."""
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        args = tool_input.tool_args
+        action = str(args["action"]).strip().lower()
+        try:
+            profile = resolve_person(
+                hass,
+                explicit_person=args.get("person"),
+                context_user_id=_user_id_from_llm_context(llm_context),
+            )
+            today = dt_util.now().date()
+            if action == "generate":
+                days = max(1, min(14, int(args.get("days", 7))))
+                profiles = (
+                    [prt.profile for prt in runtime.persons.values()]
+                    if bool(args.get("include_household", False)) and runtime.persons
+                    else [profile]
+                )
+                draft = await runtime.shopping_service.generate_draft(
+                    profile,
+                    profiles,
+                    today,
+                    today + timedelta(days=days - 1),
+                )
+                await runtime.async_notify_person_updated(
+                    profile.person_id, "assist_shopping_generate"
+                )
+                return llm.ToolResult(
+                    data={
+                        "action": "generate",
+                        "person": profile.display_name,
+                        "draft_id": draft.draft_id,
+                        "items_count": len(draft.items),
+                        "items": [
+                            f"{it.label}: {round(it.quantity, 1)} {it.unit} ({it.aisle})"
+                            for it in draft.items[:25]
+                        ],
+                    }
+                )
+            if action == "commit":
+                res = await async_commit_draft_to_todo(hass, runtime, profile)
+                added_json: list[JsonValueType] = list(res["added_items"])
+                return llm.ToolResult(
+                    data={
+                        "action": "commit",
+                        "person": profile.display_name,
+                        "todo_entity": str(res["todo_entity"]),
+                        "added_count": int(res["added_count"]),
+                        "skipped_duplicates_count": int(res["skipped_duplicates_count"]),
+                        "added_items": added_json,
+                    }
+                )
+            if action == "add_item":
+                label = str(args.get("item_label") or "").strip()
+                if not label:
+                    return llm.ToolResult(
+                        data={"error": "item_label is required for add_item"},
+                        error=True,
+                    )
+                cur_draft = await runtime.shopping_repo.get_latest_draft(
+                    profile.person_id
+                )
+                if cur_draft is None:
+                    cur_draft = await runtime.shopping_repo.save_draft(
+                        ShoppingDraft(
+                            draft_id=f"draft_{uuid.uuid4().hex[:12]}",
+                            person_id=profile.person_id,
+                            start_date=today,
+                            end_date=today + timedelta(days=6),
+                            scope_person_ids=[profile.person_id],
+                            items=[],
+                        )
+                    )
+                new_item = ShoppingDraftItem(
+                    draft_item_id=f"sitem_{uuid.uuid4().hex[:10]}",
+                    draft_id=cur_draft.draft_id,
+                    label=label,
+                    quantity=max(0.1, float(args.get("quantity", 1.0))),
+                    unit=str(args.get("unit") or "pcs"),
+                    category="other",
+                    aisle=aisle_for_category("other"),
+                    checked=True,
+                )
+                updated = await runtime.shopping_repo.add_draft_item(
+                    cur_draft.draft_id, new_item
+                )
+                await runtime.async_notify_person_updated(
+                    profile.person_id, "assist_shopping_add"
+                )
+                return llm.ToolResult(
+                    data={
+                        "action": "add_item",
+                        "added": label,
+                        "items_count": len(updated.items) if updated else 1,
+                    }
+                )
+
+            existing_draft = await runtime.shopping_repo.get_latest_draft(
+                profile.person_id, include_committed=True
+            )
+            if existing_draft is None:
+                return llm.ToolResult(
+                    data={
+                        "action": "get",
+                        "person": profile.display_name,
+                        "items_count": 0,
+                        "items": [],
+                    }
+                )
+            return llm.ToolResult(
+                data={
+                    "action": "get",
+                    "person": profile.display_name,
+                    "draft_id": existing_draft.draft_id,
+                    "status": existing_draft.status,
+                    "items_count": len(existing_draft.items),
+                    "items": [
+                        f"[{'x' if it.checked else ' '}] {it.label}: {round(it.quantity, 1)} {it.unit}"
+                        for it in existing_draft.items[:25]
+                    ],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return llm.ToolResult(data={"error": str(exc)}, error=True)
+
+
+class GetNutritionTrendsTool(llm.Tool):
+    """Assist tool returning 7/30/90d nutrition, weight EMA, adaptive TDEE, and ETA."""
+
+    name = "get_nutrition_trends"
+    title = "Get nutrition and weight trends"
+    description = (
+        "Inspect 7, 30, or 90-day weight EMA trend, expected vs actual pace, "
+        "goal ETA, adaptive TDEE confidence, calorie adherence, and average macros."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema(
+        {
+            vol.Optional("days", default=30): vol.Coerce(int),
+            vol.Optional("person"): str,
+        }
+    )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> llm.ToolResult:
+        """Compute and return 7/30/90d nutrition & body trend analytics."""
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        args = tool_input.tool_args
+        try:
+            profile = resolve_person(
+                hass,
+                explicit_person=args.get("person"),
+                context_user_id=_user_id_from_llm_context(llm_context),
+            )
+            person_rt = runtime.persons.get(profile.person_id)
+            if person_rt is None or person_rt.coordinator.data is None:
+                return llm.ToolResult(data={"error": "Person state not ready"}, error=True)
+            data = person_rt.coordinator.data
+            raw_days = int(args.get("days", 30))
+            norm_days = 7 if raw_days <= 10 else (30 if raw_days <= 45 else 90)
+            start_d = data.today - timedelta(days=norm_days - 1)
+            snaps = await runtime.profile_repo.get_biometric_snapshots_range(
+                profile.person_id, start_d, data.today
+            )
+            daily_macros = await runtime.meal_repo.get_daily_macros_range(
+                profile.person_id, start_d, data.today
+            )
+            summary = build_trends_summary(
+                profile=profile,
+                snapshots=snaps,
+                daily_macros=daily_macros,
+                current_tdee=data.tdee,
+                current_targets=data.targets,
+                today=data.today,
+                days=norm_days,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return llm.ToolResult(data={"error": str(exc)}, error=True)
+
+        return llm.ToolResult(
+            data={
+                "person": profile.display_name,
+                "days": summary.days,
+                "logged_days": summary.logged_days,
+                "logging_adherence_pct": summary.logging_adherence_pct,
+                "avg_kcal": summary.avg_kcal,
+                "avg_target_kcal": summary.avg_target_kcal,
+                "kcal_adherence_pct": summary.kcal_adherence_pct,
+                "avg_protein_g": summary.avg_protein_g,
+                "avg_carbs_g": summary.avg_carbs_g,
+                "avg_fat_g": summary.avg_fat_g,
+                "avg_fiber_g": summary.avg_fiber_g,
+                "expected_weekly_rate_kg": summary.expected_vs_actual.expected_weekly_rate_kg,
+                "actual_weekly_rate_kg": summary.expected_vs_actual.actual_weekly_rate_kg,
+                "pace_status": summary.expected_vs_actual.status,
+                "current_weight_ema_kg": summary.expected_vs_actual.current_weight_ema_kg,
+                "eta_date": (
+                    summary.expected_vs_actual.eta_date.isoformat()
+                    if summary.expected_vs_actual.eta_date
+                    else None
+                ),
+                "engine_used": summary.engine_used,
+                "adaptive_confidence": summary.adaptive_confidence,
+                "wearable_multiplier": summary.wearable_multiplier,
+            }
+        )
+
+
+class ManageWorkoutsTool(llm.Tool):
+    """Assist tool to check or override today's Training Day status and workout schedule."""
+
+    name = "manage_workouts"
+    title = "Manage workouts and Training Day switch"
+    description = (
+        "Check today's Training/Rest Day status and upcoming workouts (`status` / `list_schedule`), "
+        "manually override today (`set_training_day` with `is_training_day`), or restore "
+        "automatic schedule/Garmin Coach sync (`clear_training_day`)."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema(
+        {
+            vol.Required("action"): vol.In(
+                ["status", "set_training_day", "clear_training_day", "list_schedule"]
+            ),
+            vol.Optional("is_training_day"): bool,
+            vol.Optional("person"): str,
+        }
+    )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> llm.ToolResult:
+        """Read or update Training Day status and workout schedule."""
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        args = tool_input.tool_args
+        action = str(args["action"]).strip().lower()
+        try:
+            profile = resolve_person(
+                hass,
+                explicit_person=args.get("person"),
+                context_user_id=_user_id_from_llm_context(llm_context),
+            )
+            person_rt = runtime.persons.get(profile.person_id)
+            if person_rt is None or person_rt.coordinator.data is None:
+                return llm.ToolResult(data={"error": "Person state not ready"}, error=True)
+            today = person_rt.coordinator.data.today
+
+            if action == "set_training_day":
+                is_train = bool(args.get("is_training_day", True))
+                await runtime.workout_repo.set_override(
+                    TrainingDayOverride(
+                        person_id=profile.person_id,
+                        override_date=today,
+                        is_training_day=is_train,
+                        source="assist",
+                    )
+                )
+                await runtime.async_notify_person_updated(
+                    profile.person_id, "assist_set_training_day"
+                )
+            elif action == "clear_training_day":
+                await runtime.workout_repo.clear_override(profile.person_id, today)
+                await runtime.async_notify_person_updated(
+                    profile.person_id, "assist_clear_training_day"
+                )
+
+            data = person_rt.coordinator.data
+            schedule = await runtime.workout_repo.list_schedule(profile.person_id)
+            sched_json: list[JsonValueType] = [
+                f"Day {w.weekday}: {w.title} ({w.activity_type.value}, {w.duration_min}m)"
+                for w in schedule
+                if w.enabled
+            ]
+            return llm.ToolResult(
+                data={
+                    "person": profile.display_name,
+                    "date": data.today.isoformat(),
+                    "is_training_day": data.is_training_day,
+                    "source": data.training_day_source,
+                    "kcal_target": data.targets.target_kcal,
+                    "carbs_target_g": data.targets.carbs_g,
+                    "schedule": sched_json,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return llm.ToolResult(data={"error": str(exc)}, error=True)
+
+
 class CaloriesBuddyLLMAPI(llm.API):
-    """Home Assistant Assist API exposing nutrition logging, summary, and planning tools."""
+    """Home Assistant Assist API exposing nutrition, shopping, workout, and trends tools."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         super().__init__(hass=hass, id=DOMAIN, name="HA Calories Buddy")
@@ -804,13 +1167,15 @@ class CaloriesBuddyLLMAPI(llm.API):
     async def async_get_api_instance(
         self, llm_context: llm.LLMContext
     ) -> llm.APIInstance:
-        """Return API instance with all 7 nutrition & planning tools."""
+        """Return API instance with all 10 nutrition, butler, workout & trends tools."""
         return llm.APIInstance(
             api=self,
             api_prompt=(
                 "Use HA Calories Buddy tools whenever the user logs meals, corrects "
                 "a logged food or meal slot, asks about today's calories/macros/fiber/TDEE, "
-                "asks for recipe suggestions, creates/modifies a meal plan, or rebalances today."
+                "asks for recipe suggestions, creates/modifies a meal plan, rebalances today, "
+                "manages the grocery/shopping list, toggles/checks workouts & training days, "
+                "or asks about weight/nutrition trends."
             ),
             llm_context=llm_context,
             tools=[
@@ -821,6 +1186,9 @@ class CaloriesBuddyLLMAPI(llm.API):
                 GenerateMealPlanTool(),
                 SwapPlanMealTool(),
                 RebalanceTodayTool(),
+                ManageShoppingListTool(),
+                GetNutritionTrendsTool(),
+                ManageWorkoutsTool(),
             ],
         )
 

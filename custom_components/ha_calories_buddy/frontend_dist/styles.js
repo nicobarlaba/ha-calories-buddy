@@ -1,4 +1,4 @@
-/** Shared Shadow DOM stylesheet matching Home Assistant light/dark themes */
+/** Shared Shadow DOM stylesheet matching Home Assistant light/dark themes (v0.3.0) */
 
 export const CARD_STYLES = `
   :host {
@@ -8,8 +8,8 @@ export const CARD_STYLES = `
   }
   ha-card {
     background: var(--ha-card-background, var(--card-background-color, #fff));
-    border-radius: var(--ha-card-border-radius, 12px);
-    box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0, 0, 0, 0.08));
+    border-radius: var(--ha-card-border-radius, 14px);
+    box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0, 0, 0, 0.08));
     padding: 16px;
     overflow: hidden;
   }
@@ -22,17 +22,49 @@ export const CARD_STYLES = `
     flex-wrap: wrap;
   }
   .header-title {
-    font-size: 1.15rem;
-    font-weight: 600;
+    font-size: 1.12rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
     display: flex;
     align-items: center;
     gap: 8px;
   }
+  .header-emblem {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    background: linear-gradient(135deg, #03a9f4, #26a69a);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
   .controls-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
     flex-wrap: wrap;
+  }
+  .icon-btn {
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
+    color: var(--primary-text-color);
+    border-radius: 999px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.95rem;
+  }
+  .icon-btn.active {
+    background: var(--primary-color, #03a9f4);
+    color: var(--text-primary-color, #fff);
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
   }
   select, input, button, textarea {
     font-family: inherit;
@@ -96,21 +128,30 @@ export const CARD_STYLES = `
   }
   .tabs {
     display: flex;
-    gap: 6px;
-    border-bottom: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
-    padding-bottom: 8px;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 11px;
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.1));
     margin-bottom: 14px;
-    flex-wrap: wrap;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
   .tab-btn {
+    flex: 1 0 auto;
     background: transparent;
     color: var(--secondary-text-color);
-    padding: 6px 12px;
+    padding: 7px 10px;
     border-radius: 8px;
+    font-size: 0.84rem;
+    font-weight: 600;
+    white-space: nowrap;
+    text-align: center;
   }
   .tab-btn.active {
-    background: var(--primary-color, #03a9f4);
-    color: var(--text-primary-color, #fff);
+    background: var(--card-background-color, #fff);
+    color: var(--primary-text-color);
+    border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.22));
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
   }
   .summary-grid {
     display: grid;
@@ -572,5 +613,148 @@ export const CARD_STYLES = `
     border-top: 1px dashed var(--divider-color, rgba(127, 127, 127, 0.2));
     flex-wrap: wrap;
     font-size: 0.82rem;
+  }
+  .training-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 11px;
+    border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.22));
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.06));
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .training-banner.is-training {
+    border-color: rgba(76, 175, 80, 0.45);
+    background: rgba(76, 175, 80, 0.08);
+  }
+  .aisle-group {
+    border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
+    border-radius: 10px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+  }
+  .aisle-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--secondary-text-color);
+    margin-bottom: 6px;
+  }
+  .shopping-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px dashed var(--divider-color, rgba(127, 127, 127, 0.16));
+    font-size: 0.86rem;
+    flex-wrap: wrap;
+  }
+  .shopping-row.unchecked {
+    opacity: 0.52;
+    text-decoration: line-through;
+  }
+  .shopping-row-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+  .shopping-row-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .kpi-card {
+    border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.05));
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .kpi-label {
+    font-size: 0.74rem;
+    color: var(--secondary-text-color);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-weight: 600;
+  }
+  .kpi-val {
+    font-size: 1.18rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi-sub {
+    font-size: 0.76rem;
+    color: var(--secondary-text-color);
+  }
+  .chart-card {
+    border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+  .chart-svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    overflow: visible;
+  }
+  .workout-day-strip {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  .workout-day-cell {
+    border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.22));
+    border-radius: 8px;
+    padding: 5px 4px;
+    text-align: center;
+    font-size: 0.72rem;
+    background: transparent;
+    color: var(--primary-text-color);
+  }
+  .workout-day-cell.has-workout {
+    border-color: rgba(76, 175, 80, 0.55);
+    background: rgba(76, 175, 80, 0.12);
+    font-weight: 600;
+  }
+  @media (max-width: 520px) {
+    ha-card {
+      padding: 12px;
+    }
+    .form-grid {
+      grid-template-columns: 1fr;
+    }
+    .macro-legend {
+      grid-template-columns: 1fr;
+    }
   }
 `;

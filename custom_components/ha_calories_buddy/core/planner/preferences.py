@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import date
 
 from pydantic import BaseModel, Field
@@ -307,6 +308,7 @@ class PreferenceContext(BaseModel):
     liked_titles: list[str] = Field(default_factory=list)
     disliked_titles: list[str] = Field(default_factory=list)
     never_suggest_titles: list[str] = Field(default_factory=list)
+    global_baseline_notes: str = ""
 
 
 class PreferenceEngine:
@@ -316,9 +318,11 @@ class PreferenceEngine:
         self,
         pref_repo: PreferenceRepository,
         meal_repo: MealRepository,
+        global_notes_getter: Callable[[], str] | None = None,
     ) -> None:
         self._pref_repo = pref_repo
         self._meal_repo = meal_repo
+        self._global_notes_getter = global_notes_getter
 
     async def build_context(
         self,
@@ -424,6 +428,11 @@ class PreferenceEngine:
             liked_titles=liked_titles,
             disliked_titles=disliked_titles,
             never_suggest_titles=never_suggest,
+            global_baseline_notes=(
+                self._global_notes_getter().strip()
+                if self._global_notes_getter is not None
+                else ""
+            ),
         )
 
     @staticmethod

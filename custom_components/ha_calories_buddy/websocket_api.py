@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import probatio as vol
@@ -33,6 +33,11 @@ from custom_components.ha_calories_buddy.core.models import (
     PreferenceScope,
     PreferenceStance,
     PreparationState,
+    ShoppingDraft,
+    ShoppingDraftItem,
+    TrainingDayOverride,
+    WorkoutActivityType,
+    WorkoutScheduleItem,
 )
 from custom_components.ha_calories_buddy.core.nutrition.atwater import check_atwater
 from custom_components.ha_calories_buddy.core.nutrition.recipes import (
@@ -41,8 +46,14 @@ from custom_components.ha_calories_buddy.core.nutrition.recipes import (
 from custom_components.ha_calories_buddy.core.nutrition.yield_factors import (
     default_yield_for_category,
 )
+from custom_components.ha_calories_buddy.core.physiology.trends import (
+    build_trends_summary,
+)
 from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
     compute_smart_slot_budget,
+)
+from custom_components.ha_calories_buddy.core.planner.shopping import (
+    aisle_for_category,
 )
 from custom_components.ha_calories_buddy.core.planner.slot_resolver import (
     default_slots_for_language,
@@ -56,6 +67,9 @@ from custom_components.ha_calories_buddy.identity import (
     resolve_person,
 )
 from custom_components.ha_calories_buddy.runtime import DomainRuntime
+from custom_components.ha_calories_buddy.shopping_bridge import (
+    async_commit_draft_to_todo,
+)
 
 
 def _resolve_ws_person(
@@ -87,6 +101,15 @@ def _safe_person_payload(
         "goal_type": profile.goal_type.value,
         "target_mode": profile.target_mode.value,
         "tdee_engine": profile.tdee_engine.value,
+        "target_weight_kg": profile.target_weight_kg,
+        "target_body_fat_pct": profile.target_body_fat_pct,
+        "has_manual_training_targets": bool(
+            profile.manual_targets is not None
+            and profile.manual_targets.training_kcal is not None
+        ),
+        "todo_entity": profile.entity_mappings.todo_entity,
+        "workout_calendar_entity": profile.entity_mappings.workout_calendar_entity,
+        "activities_entity": profile.entity_mappings.activities_entity,
         "llm_enabled": runtime.is_llm_enabled(profile),
         "meal_slots": [s.model_dump(mode="json") for s in profile.meal_slots],
     }
@@ -213,13 +236,26 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
                 "meals": [m.model_dump(mode="json") for m in meals],
                 "planned_today": planned_payload,
                 "latest_weight_kg": state.latest_weight_kg,
+                "workouts": {
+                    "is_training_day": state.is_training_day,
+                    "source": state.training_day_source,
+                    "today_scheduled": [
+                        w.model_dump(mode="json") for w in state.today_workouts
+                    ],
+                    "today_calendar": [
+                        w.model_dump(mode="json")
+                        for w in state.calendar_workouts_by_date.get(state.today, [])
+                    ],
+                },
                 "biometrics": {
                     "weight_kg": state.weight_kg,
+                    "weight_ema_kg": state.weight_ema_kg,
                     "weight_source": state.weight_source,
                     "weight_entity_id": state.weight_entity_id,
                     "weight_entity_name": state.weight_entity_name,
                     "weight_sensor_available": state.weight_sensor_available,
                     "body_fat_pct": state.body_fat_pct,
+                    "body_fat_ema_pct": state.body_fat_ema_pct,
                     "body_fat_source": state.body_fat_source,
                     "body_fat_entity_id": state.body_fat_entity_id,
                     "body_fat_entity_name": state.body_fat_entity_name,
@@ -815,6 +851,13 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             meal_prep_mode=bool(msg.get("meal_prep_mode", False)),
             notes=str(msg.get("notes") or ""),
         )
+        workout_ctx = await runtime.workout_repo.build_workout_prompt_context(
+            profile.person_id,
+            start_d,
+            opts.num_days,
+            language=profile.language,
+            calendar_workouts_by_date=data.calendar_workouts_by_date,
+        )
         try:
             plan = await runtime.planner_service.generate_meal_plan(
                 profile,
@@ -822,6 +865,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
                 daily_targets=data.targets,
                 options=opts,
                 reference_today=data.today,
+                workout_context=workout_ctx,
             )
         except Exception as exc:  # noqa: BLE001
             connection.send_error(msg["id"], "generate_plan_failed", str(exc))
@@ -880,6 +924,13 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             set(totals.by_slot.keys()),
             budget_mode=str(msg.get("budget_mode") or "auto"),
         )
+        workout_ctx = await runtime.workout_repo.build_workout_prompt_context(
+            profile.person_id,
+            today,
+            1,
+            language=profile.language,
+            calendar_workouts_by_date=data.calendar_workouts_by_date,
+        )
         try:
             suggestions = await runtime.planner_service.suggest_meal(
                 profile,
@@ -890,6 +941,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
                 count=max(1, min(3, int(msg.get("count", 3)))),
                 reference_date=today,
                 budget_mode=mode_used,
+                workout_context=workout_ctx,
             )
         except Exception as exc:  # noqa: BLE001
             connection.send_error(msg["id"], "suggest_meal_failed", str(exc))
@@ -1320,6 +1372,463 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
             return
         connection.send_result(msg["id"], {"draft": draft})
 
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/get_shopping_draft",
+            vol.Optional("person_id"): str,
+            vol.Optional("include_committed", default=True): bool,
+        }
+    )
+    @async_response
+    async def ws_get_shopping_draft(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        draft = await runtime.shopping_repo.get_latest_draft(
+            profile.person_id,
+            include_committed=bool(msg.get("include_committed", True)),
+        )
+        connection.send_result(
+            msg["id"],
+            {
+                "draft": draft.model_dump(mode="json") if draft else None,
+                "todo_entity": profile.entity_mappings.todo_entity,
+            },
+        )
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/generate_shopping_draft",
+            vol.Optional("person_id"): str,
+            vol.Optional("start_date"): str,
+            vol.Optional("end_date"): str,
+            vol.Optional("include_household", default=False): bool,
+        }
+    )
+    @async_response
+    async def ws_generate_shopping_draft(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        today = dt_util.now().date()
+        start_d = (
+            date.fromisoformat(msg["start_date"])
+            if msg.get("start_date")
+            else today
+        )
+        end_d = (
+            date.fromisoformat(msg["end_date"])
+            if msg.get("end_date")
+            else start_d + timedelta(days=6)
+        )
+        profiles = (
+            [prt.profile for prt in runtime.persons.values()]
+            if bool(msg.get("include_household", False)) and runtime.persons
+            else [profile]
+        )
+        draft = await runtime.shopping_service.generate_draft(
+            profile, profiles, start_d, end_d
+        )
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_generate_shopping_draft"
+        )
+        connection.send_result(
+            msg["id"],
+            {
+                "draft": draft.model_dump(mode="json"),
+                "todo_entity": profile.entity_mappings.todo_entity,
+            },
+        )
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/update_shopping_item",
+            vol.Required("draft_id"): str,
+            vol.Required("draft_item_id"): str,
+            vol.Optional("label"): str,
+            vol.Optional("quantity"): vol.Coerce(float),
+            vol.Optional("unit"): str,
+            vol.Optional("aisle"): str,
+            vol.Optional("brand"): vol.Any(str, None),
+            vol.Optional("checked"): bool,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_update_shopping_item(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        updated = await runtime.shopping_repo.update_draft_item(
+            str(msg["draft_id"]),
+            str(msg["draft_item_id"]),
+            label=msg.get("label"),
+            quantity=float(msg["quantity"]) if msg.get("quantity") is not None else None,
+            unit=msg.get("unit"),
+            aisle=msg.get("aisle"),
+            brand=msg.get("brand"),
+            update_brand="brand" in msg,
+            checked=bool(msg["checked"]) if "checked" in msg else None,
+        )
+        if updated is None:
+            connection.send_error(msg["id"], "not_found", "Shopping item not found")
+            return
+        connection.send_result(msg["id"], {"draft": updated.model_dump(mode="json")})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/add_shopping_item",
+            vol.Optional("draft_id"): str,
+            vol.Required("label"): str,
+            vol.Optional("quantity", default=1.0): vol.Coerce(float),
+            vol.Optional("unit", default="pcs"): str,
+            vol.Optional("aisle"): str,
+            vol.Optional("brand"): str,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_add_shopping_item(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        today = dt_util.now().date()
+        draft_id = str(msg.get("draft_id") or "").strip()
+        if not draft_id:
+            existing = await runtime.shopping_repo.get_latest_draft(profile.person_id)
+            if existing is None:
+                existing = await runtime.shopping_repo.save_draft(
+                    ShoppingDraft(
+                        draft_id=f"draft_{uuid.uuid4().hex[:12]}",
+                        person_id=profile.person_id,
+                        start_date=today,
+                        end_date=today + timedelta(days=6),
+                        scope_person_ids=[profile.person_id],
+                        items=[],
+                    )
+                )
+            draft_id = existing.draft_id
+
+        item = ShoppingDraftItem(
+            draft_item_id=f"sitem_{uuid.uuid4().hex[:10]}",
+            draft_id=draft_id,
+            label=str(msg["label"]).strip(),
+            brand=str(msg.get("brand") or "").strip() or None,
+            quantity=max(0.1, float(msg.get("quantity", 1.0))),
+            unit=str(msg.get("unit") or "pcs").strip() or "pcs",
+            category="other",
+            aisle=str(msg.get("aisle") or aisle_for_category("other")),
+            checked=True,
+        )
+        updated = await runtime.shopping_repo.add_draft_item(draft_id, item)
+        if updated is None:
+            connection.send_error(msg["id"], "not_found", "Shopping draft not found")
+            return
+        connection.send_result(msg["id"], {"draft": updated.model_dump(mode="json")})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/delete_shopping_item",
+            vol.Required("draft_id"): str,
+            vol.Required("draft_item_id"): str,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_delete_shopping_item(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        updated = await runtime.shopping_repo.delete_draft_item(
+            str(msg["draft_id"]), str(msg["draft_item_id"])
+        )
+        if updated is None:
+            connection.send_error(msg["id"], "not_found", "Shopping item not found")
+            return
+        connection.send_result(msg["id"], {"draft": updated.model_dump(mode="json")})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/commit_shopping_draft",
+            vol.Optional("draft_id"): str,
+            vol.Optional("todo_entity"): str,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_commit_shopping_draft(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        try:
+            res = await async_commit_draft_to_todo(
+                hass,
+                runtime,
+                profile,
+                draft_id=msg.get("draft_id") or None,
+                todo_entity_override=msg.get("todo_entity") or None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            connection.send_error(msg["id"], "commit_shopping_failed", str(exc))
+            return
+        connection.send_result(msg["id"], res)
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/get_trends",
+            vol.Optional("person_id"): str,
+            vol.Optional("days", default=30): vol.Coerce(int),
+        }
+    )
+    @async_response
+    async def ws_get_trends(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        person_rt = runtime.persons.get(profile.person_id)
+        if person_rt is None:
+            connection.send_error(msg["id"], "not_loaded", "Person not active")
+            return
+        if person_rt.coordinator.data is None:
+            await person_rt.coordinator.async_refresh()
+        data = person_rt.coordinator.data
+        if data is None:
+            connection.send_error(msg["id"], "no_data", "Dashboard state unavailable")
+            return
+        raw_days = int(msg.get("days", 30))
+        norm_days = 7 if raw_days <= 10 else (30 if raw_days <= 45 else 90)
+        start_d = data.today - timedelta(days=norm_days - 1)
+        snaps = await runtime.profile_repo.get_biometric_snapshots_range(
+            profile.person_id, start_d, data.today
+        )
+        daily_macros = await runtime.meal_repo.get_daily_macros_range(
+            profile.person_id, start_d, data.today
+        )
+        summary = build_trends_summary(
+            profile=profile,
+            snapshots=snaps,
+            daily_macros=daily_macros,
+            current_tdee=data.tdee,
+            current_targets=data.targets,
+            today=data.today,
+            days=norm_days,
+        )
+        connection.send_result(msg["id"], {"trends": summary.model_dump(mode="json")})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/get_workouts",
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_get_workouts(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        person_rt = runtime.persons.get(profile.person_id)
+        if person_rt is None:
+            connection.send_error(msg["id"], "not_loaded", "Person not active")
+            return
+        if person_rt.coordinator.data is None:
+            await person_rt.coordinator.async_refresh()
+        data = person_rt.coordinator.data
+        if data is None:
+            connection.send_error(msg["id"], "no_data", "Dashboard state unavailable")
+            return
+        schedule = await runtime.workout_repo.list_schedule(profile.person_id)
+        override = await runtime.workout_repo.get_override(
+            profile.person_id, data.today
+        )
+        connection.send_result(
+            msg["id"],
+            {
+                "today": data.today.isoformat(),
+                "is_training_day": data.is_training_day,
+                "training_day_source": data.training_day_source,
+                "has_manual_override": override is not None,
+                "workout_calendar_entity": profile.entity_mappings.workout_calendar_entity,
+                "activities_entity": profile.entity_mappings.activities_entity,
+                "has_manual_training_targets": bool(
+                    profile.manual_targets is not None
+                    and profile.manual_targets.training_kcal is not None
+                ),
+                "schedule": [w.model_dump(mode="json") for w in schedule],
+                "calendar_workouts": [
+                    w.model_dump(mode="json") for w in data.calendar_workouts
+                ],
+                "recent_activities": [
+                    a.model_dump(mode="json") for a in data.recent_activities
+                ],
+            },
+        )
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/save_workout_item",
+            vol.Optional("person_id"): str,
+            vol.Optional("schedule_id"): vol.Any(str, None),
+            vol.Required("weekday"): vol.Coerce(int),
+            vol.Required("title"): str,
+            vol.Optional("activity_type", default="strength"): str,
+            vol.Optional("duration_min", default=60): vol.Coerce(int),
+            vol.Optional("estimated_kcal"): vol.Any(vol.Coerce(float), None),
+            vol.Optional("time_of_day", default="18:00"): str,
+            vol.Optional("notes", default=""): str,
+            vol.Optional("enabled", default=True): bool,
+        }
+    )
+    @async_response
+    async def ws_save_workout_item(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        raw_type = str(msg.get("activity_type") or "strength").strip().lower()
+        try:
+            act_type = WorkoutActivityType(raw_type)
+        except ValueError:
+            act_type = WorkoutActivityType.OTHER
+        item = WorkoutScheduleItem(
+            schedule_id=str(msg.get("schedule_id") or ""),
+            person_id=profile.person_id,
+            weekday=max(0, min(6, int(msg["weekday"]))),
+            title=str(msg["title"]).strip(),
+            activity_type=act_type,
+            duration_min=max(5, min(480, int(msg.get("duration_min", 60)))),
+            estimated_kcal=(
+                float(msg["estimated_kcal"])
+                if msg.get("estimated_kcal") not in (None, "")
+                else None
+            ),
+            time_of_day=str(msg.get("time_of_day") or "18:00"),
+            notes=str(msg.get("notes") or ""),
+            enabled=bool(msg.get("enabled", True)),
+        )
+        saved = await runtime.workout_repo.upsert_schedule_item(item)
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_save_workout_item"
+        )
+        connection.send_result(msg["id"], {"workout": saved.model_dump(mode="json")})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/delete_workout_item",
+            vol.Required("schedule_id"): str,
+            vol.Optional("person_id"): str,
+        }
+    )
+    @async_response
+    async def ws_delete_workout_item(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        deleted = await runtime.workout_repo.delete_schedule_item(
+            profile.person_id, str(msg["schedule_id"])
+        )
+        if deleted:
+            await runtime.async_notify_person_updated(
+                profile.person_id, "ws_delete_workout_item"
+            )
+        connection.send_result(msg["id"], {"deleted": deleted})
+
+    @websocket_command(
+        {
+            "type": f"{DOMAIN}/set_training_day",
+            vol.Optional("person_id"): str,
+            vol.Optional("is_training_day"): vol.Any(bool, None),
+            vol.Optional("date"): str,
+            vol.Optional("clear_override", default=False): bool,
+        }
+    )
+    @async_response
+    async def ws_set_training_day(
+        hass: HomeAssistant,
+        connection: ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        runtime: DomainRuntime = hass.data[DOMAIN]
+        profile = _resolve_ws_person(hass, connection, msg)
+        if profile is None:
+            return
+        target_d = (
+            date.fromisoformat(msg["date"])
+            if msg.get("date")
+            else dt_util.now().date()
+        )
+        if bool(msg.get("clear_override", False)) or msg.get("is_training_day") is None:
+            await runtime.workout_repo.clear_override(profile.person_id, target_d)
+        else:
+            await runtime.workout_repo.set_override(
+                TrainingDayOverride(
+                    person_id=profile.person_id,
+                    override_date=target_d,
+                    is_training_day=bool(msg["is_training_day"]),
+                    source="manual",
+                )
+            )
+        await runtime.async_notify_person_updated(
+            profile.person_id, "ws_set_training_day"
+        )
+        person_rt = runtime.persons.get(profile.person_id)
+        data = person_rt.coordinator.data if person_rt else None
+        connection.send_result(
+            msg["id"],
+            {
+                "is_training_day": data.is_training_day if data else False,
+                "training_day_source": data.training_day_source if data else "rest",
+            },
+        )
+
     for cmd in (
         ws_list_persons,
         ws_dashboard,
@@ -1351,5 +1860,16 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         ws_save_recipe,
         ws_delete_recipe,
         ws_parse_recipe_text,
+        ws_get_shopping_draft,
+        ws_generate_shopping_draft,
+        ws_update_shopping_item,
+        ws_add_shopping_item,
+        ws_delete_shopping_item,
+        ws_commit_shopping_draft,
+        ws_get_trends,
+        ws_get_workouts,
+        ws_save_workout_item,
+        ws_delete_workout_item,
+        ws_set_training_day,
     ):
         websocket_api.async_register_command(hass, cmd)

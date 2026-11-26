@@ -98,13 +98,17 @@ async def test_sensors_unit_conversion_unavailable_fallback_and_calendars(
 
     marco_sensors = [e for e in marco_entities if e.domain == "sensor"]
     marco_cals = [e for e in marco_entities if e.domain == "calendar"]
+    marco_switches = [e for e in marco_entities if e.domain == "switch"]
     giulia_sensors = [e for e in giulia_entities if e.domain == "sensor"]
     giulia_cals = [e for e in giulia_entities if e.domain == "calendar"]
+    giulia_switches = [e for e in giulia_entities if e.domain == "switch"]
 
     assert len(marco_sensors) == 10
     assert len(giulia_sensors) == 10
     assert len(marco_cals) == 1
     assert len(giulia_cals) == 1
+    assert len(marco_switches) == 1
+    assert len(giulia_switches) == 1
 
     marco_fiber_ent = next(
         e.entity_id for e in marco_sensors if e.unique_id == "person_marco_fiber_consumed"

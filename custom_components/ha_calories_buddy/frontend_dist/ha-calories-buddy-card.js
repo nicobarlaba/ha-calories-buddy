@@ -1,4 +1,4 @@
-/** HA Calories Buddy Custom Lovelace Card v0.2.6 (Zero-Build Modular ES Web Component) */
+/** HA Calories Buddy Custom Lovelace Card v0.3.0 (Zero-Build Modular ES Web Component) */
 import { CaloriesBuddyApi } from "./api.js";
 import { openBarcodeScannerModal } from "./components/barcode-scanner.js";
 import { t } from "./i18n/index.js";
@@ -6,7 +6,9 @@ import { CARD_STYLES } from "./styles.js";
 import { escapeHtml } from "./utils.js";
 import { renderPlanView } from "./views/plan-view.js";
 import { renderPreferencesView } from "./views/preferences-view.js";
+import { renderShoppingView } from "./views/shopping-view.js";
 import { renderTodayView } from "./views/today-view.js";
+import { renderTrendsView } from "./views/trends-view.js";
 import { renderVaultView } from "./views/vault-view.js";
 
 class HaCaloriesBuddyCard extends HTMLElement {
@@ -42,6 +44,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
       quickLogRecipeId: null,
     };
     this._planState = {
+      subTab: "menu",
       plan: null,
       selectedDate: null,
       showGenerateForm: false,
@@ -50,6 +53,26 @@ class HaCaloriesBuddyCard extends HTMLElement {
       suggestMeta: null,
       suggestBudgetMode: "auto",
       swappingItemId: null,
+    };
+    this._shoppingState = {
+      loaded: false,
+      draft: null,
+      todoEntity: null,
+      startDate: null,
+      endDate: null,
+      includeHousehold: false,
+      lastCommitResult: null,
+    };
+    this._workoutState = {
+      loaded: false,
+      data: null,
+      showForm: false,
+    };
+    this._trendsState = {
+      loaded: false,
+      days: 30,
+      weightMetric: "weight",
+      summary: null,
     };
     this._prefState = {
       loaded: false,
@@ -139,7 +162,12 @@ class HaCaloriesBuddyCard extends HTMLElement {
     if (!states) return;
     const parts = [];
     for (const key of Object.keys(states)) {
-      if (!key.startsWith("sensor.calories_buddy_")) continue;
+      if (
+        !key.startsWith("sensor.calories_buddy_") &&
+        !key.startsWith("switch.calories_buddy_")
+      ) {
+        continue;
+      }
       const st = states[key];
       parts.push(`${key}:${st.last_updated || st.last_changed || st.state}`);
     }
@@ -157,8 +185,16 @@ class HaCaloriesBuddyCard extends HTMLElement {
     this._refreshTimer = setTimeout(async () => {
       this._refreshTimer = null;
       await this._loadDashboard();
-      if (this._activeTab === "plan" && this._planState.plan) {
-        await this._loadPlan();
+      if (this._activeTab === "plan") {
+        if (this._planState.subTab === "workouts") {
+          await this._loadWorkouts();
+        } else if (this._planState.plan) {
+          await this._loadPlan();
+        }
+      } else if (this._activeTab === "shopping" && this._shoppingState.loaded) {
+        await this._loadShopping();
+      } else if (this._activeTab === "trends" && this._trendsState.loaded) {
+        await this._loadTrends(this._trendsState.days);
       } else if (this._activeTab === "vault" && this._vaultState.subTab === "recipes") {
         await this._loadRecipes(this._recipeState.query);
       }
@@ -323,6 +359,48 @@ class HaCaloriesBuddyCard extends HTMLElement {
     }
   }
 
+  async _loadShopping() {
+    if (!this._api || !this._activePersonId) return;
+    try {
+      const resp = await this._api.getShoppingDraft(this._activePersonId, true);
+      this._shoppingState.loaded = true;
+      this._shoppingState.draft = resp.draft || null;
+      this._shoppingState.todoEntity =
+        resp.todo_entity || this._dashboard?.person?.todo_entity || null;
+      this._render();
+    } catch (err) {
+      this._uiState.error = err?.message || "Failed to load shopping list";
+      this._render();
+    }
+  }
+
+  async _loadWorkouts() {
+    if (!this._api || !this._activePersonId) return;
+    try {
+      const resp = await this._api.getWorkouts(this._activePersonId);
+      this._workoutState.loaded = true;
+      this._workoutState.data = resp || null;
+      this._render();
+    } catch (err) {
+      this._uiState.error = err?.message || "Failed to load workouts";
+      this._render();
+    }
+  }
+
+  async _loadTrends(days = this._trendsState.days || 30) {
+    if (!this._api || !this._activePersonId) return;
+    try {
+      const resp = await this._api.getTrends(this._activePersonId, days);
+      this._trendsState.loaded = true;
+      this._trendsState.days = resp?.trends?.days || days;
+      this._trendsState.summary = resp?.trends || null;
+      this._render();
+    } catch (err) {
+      this._uiState.error = err?.message || "Failed to load trends";
+      this._render();
+    }
+  }
+
   async _withBusy(fn) {
     this._uiState.busy = true;
     this._uiState.error = null;
@@ -342,11 +420,17 @@ class HaCaloriesBuddyCard extends HTMLElement {
     const lang = this._uiState.language;
     const cardTitle = this._config.title || t(lang, "title");
 
+    const isTrainDay = Boolean(this._dashboard?.workouts?.is_training_day);
+    const trainSource = this._dashboard?.workouts?.source || "rest";
+
     this.shadowRoot.innerHTML = `
       <style>${CARD_STYLES}</style>
       <ha-card>
         <div class="header">
-          <div class="header-title">🥗 ${escapeHtml(cardTitle)}</div>
+          <div class="header-title">
+            <span class="header-emblem">🥗</span>
+            <span>${escapeHtml(cardTitle)}</span>
+          </div>
           <div class="controls-row">
             ${
               this._persons.length > 1
@@ -362,7 +446,13 @@ class HaCaloriesBuddyCard extends HTMLElement {
                   ? `<span class="pill">${escapeHtml(this._dashboard.person.display_name)}</span>`
                   : ""
             }
-            <button type="button" class="chip-btn" id="btn-refresh-card" title="${escapeHtml(t(lang, "refresh_btn"))}" ${this._uiState.busy ? "disabled" : ""}>↻</button>
+            ${
+              this._dashboard
+                ? `<button type="button" class="chip-btn ${isTrainDay ? "active" : ""}" id="btn-header-training" title="${escapeHtml(t(lang, `training_source_${trainSource}`) || trainSource)}">${isTrainDay ? "🏋️" : "🧘"}</button>`
+                : ""
+            }
+            <button type="button" class="icon-btn ${this._activeTab === "preferences" ? "active" : ""}" id="btn-prefs-tab" title="${escapeHtml(t(lang, "tab_preferences"))}">⚙️</button>
+            <button type="button" class="icon-btn" id="btn-refresh-card" title="${escapeHtml(t(lang, "refresh_btn"))}" ${this._uiState.busy ? "disabled" : ""}>↻</button>
           </div>
         </div>
 
@@ -390,8 +480,9 @@ class HaCaloriesBuddyCard extends HTMLElement {
           <div class="tabs">
             <button type="button" class="tab-btn ${this._activeTab === "today" ? "active" : ""}" data-tab="today">${escapeHtml(t(lang, "tab_today"))}</button>
             <button type="button" class="tab-btn ${this._activeTab === "plan" ? "active" : ""}" data-tab="plan">${escapeHtml(t(lang, "tab_plan"))}</button>
+            <button type="button" class="tab-btn ${this._activeTab === "shopping" ? "active" : ""}" data-tab="shopping">${escapeHtml(t(lang, "tab_shopping"))}</button>
             <button type="button" class="tab-btn ${this._activeTab === "vault" ? "active" : ""}" data-tab="vault">${escapeHtml(t(lang, "tab_vault"))}</button>
-            <button type="button" class="tab-btn ${this._activeTab === "preferences" ? "active" : ""}" data-tab="preferences">${escapeHtml(t(lang, "tab_preferences"))}</button>
+            <button type="button" class="tab-btn ${this._activeTab === "trends" ? "active" : ""}" data-tab="trends">${escapeHtml(t(lang, "tab_trends"))}</button>
           </div>
           <div id="view-host"></div>
         `
@@ -400,10 +491,41 @@ class HaCaloriesBuddyCard extends HTMLElement {
       </ha-card>
     `;
 
+    this.shadowRoot.querySelector("#btn-header-training")?.addEventListener("click", async () => {
+      if (!this._api || !this._activePersonId) return;
+      await this._withBusy(async () => {
+        await this._api.setTrainingDay(this._activePersonId, {
+          is_training_day: !isTrainDay,
+        });
+        await this._loadDashboard();
+        if (this._activeTab === "plan" && this._planState.subTab === "workouts") {
+          await this._loadWorkouts();
+        }
+      });
+    });
+
+    this.shadowRoot.querySelector("#btn-prefs-tab")?.addEventListener("click", async () => {
+      this._activeTab =
+        this._activeTab === "preferences" ? "today" : "preferences";
+      if (this._activeTab === "preferences" && !this._prefState.loaded) {
+        await this._loadPreferences();
+      } else {
+        this._render();
+      }
+    });
+
     this.shadowRoot.querySelector("#btn-refresh-card")?.addEventListener("click", async () => {
       await this._loadDashboard();
       if (this._activeTab === "plan") {
-        await this._loadPlan();
+        if (this._planState.subTab === "workouts") {
+          await this._loadWorkouts();
+        } else {
+          await this._loadPlan();
+        }
+      } else if (this._activeTab === "shopping") {
+        await this._loadShopping();
+      } else if (this._activeTab === "trends") {
+        await this._loadTrends(this._trendsState.days);
       } else if (this._activeTab === "vault") {
         if (this._vaultState.subTab === "recipes") {
           await this._loadRecipes(this._recipeState.query);
@@ -421,6 +543,13 @@ class HaCaloriesBuddyCard extends HTMLElement {
       this._planState.plan = null;
       this._planState.suggestions = [];
       this._planState.suggestMeta = null;
+      this._shoppingState.loaded = false;
+      this._shoppingState.draft = null;
+      this._shoppingState.lastCommitResult = null;
+      this._workoutState.loaded = false;
+      this._workoutState.data = null;
+      this._trendsState.loaded = false;
+      this._trendsState.summary = null;
       this._prefState.loaded = false;
       this._recipeState.loaded = false;
       this._recipeState.quickLogRecipeId = null;
@@ -432,7 +561,15 @@ class HaCaloriesBuddyCard extends HTMLElement {
           await this._loadVault(this._vaultState.query, this._vaultState.category, 0);
         }
       } else if (this._activeTab === "plan") {
-        await this._loadPlan();
+        if (this._planState.subTab === "workouts") {
+          await this._loadWorkouts();
+        } else {
+          await this._loadPlan();
+        }
+      } else if (this._activeTab === "shopping") {
+        await this._loadShopping();
+      } else if (this._activeTab === "trends") {
+        await this._loadTrends(this._trendsState.days);
       } else if (this._activeTab === "preferences") {
         await this._loadPreferences();
       }
@@ -465,7 +602,15 @@ class HaCaloriesBuddyCard extends HTMLElement {
             this._render();
           }
         } else if (this._activeTab === "plan") {
-          await this._loadPlan();
+          if (this._planState.subTab === "workouts") {
+            await this._loadWorkouts();
+          } else {
+            await this._loadPlan();
+          }
+        } else if (this._activeTab === "shopping") {
+          await this._loadShopping();
+        } else if (this._activeTab === "trends") {
+          await this._loadTrends(this._trendsState.days);
         } else if (this._activeTab === "preferences" && !this._prefState.loaded) {
           await this._loadPreferences();
         } else {
@@ -643,80 +788,197 @@ class HaCaloriesBuddyCard extends HTMLElement {
         },
       });
     } else if (this._activeTab === "plan") {
-      renderPlanView(viewHost, this._planState, this._dashboard, this._uiState, {
-        onToggleGenerate: () => {
-          this._planState.showGenerateForm = !this._planState.showGenerateForm;
-          this._render();
-        },
-        onToggleSuggest: () => {
-          this._planState.showSuggestForm = !this._planState.showSuggestForm;
-          this._render();
-        },
-        onSelectDate: (d) => {
-          this._planState.selectedDate = d;
-          this._planState.swappingItemId = null;
-          this._render();
-        },
-        onGeneratePlan: (opts) =>
-          this._withBusy(async () => {
-            const resp = await this._api.generatePlan(this._activePersonId, opts);
-            this._planState.plan = resp.plan || null;
-            this._planState.selectedDate = this._planState.plan?.days?.[0]?.plan_date || null;
-            this._planState.showGenerateForm = false;
-            await this._loadDashboard();
-          }),
-        onSuggestMeal: (opts) =>
-          this._withBusy(async () => {
-            const resp = await this._api.suggestMeal(this._activePersonId, opts);
-            this._planState.suggestions = resp.suggestions || [];
-            this._planState.suggestBudgetMode = opts.budget_mode || "auto";
-            this._planState.suggestMeta = {
-              target_macros: resp.target_macros || null,
-              budget_mode_used: resp.budget_mode_used || opts.budget_mode || "auto",
-              meal_slot: resp.meal_slot || opts.meal_slot || "",
-            };
-            this._planState.showSuggestForm = false;
-          }),
-        onLogSuggestion: (sug) =>
-          this._withBusy(async () => {
-            await this._api.logSuggestion(
-              this._activePersonId,
-              sug,
-              1.0,
-              this._dashboard?.date || null
-            );
-            this._planState.suggestions = [];
-            this._planState.suggestMeta = null;
-            await this._loadDashboard();
-          }),
-        onPromotePlanMeal: (planItemId, scale) =>
-          this._withBusy(async () => {
-            await this._api.promotePlanMeal(this._activePersonId, planItemId, scale);
-            await this._loadPlan();
-            await this._loadDashboard();
-          }),
-        onStartSwap: (itemId) => {
-          this._planState.swappingItemId = itemId;
-          this._render();
-        },
-        onSwapPlanMeal: (planItemId, instruction) =>
-          this._withBusy(async () => {
-            await this._api.swapPlanMeal(this._activePersonId, planItemId, instruction);
+      renderPlanView(
+        viewHost,
+        this._planState,
+        this._dashboard,
+        this._uiState,
+        {
+          onSwitchPlanSubTab: async (subTab) => {
+            this._planState.subTab = subTab === "workouts" ? "workouts" : "menu";
+            if (this._planState.subTab === "workouts") {
+              await this._loadWorkouts();
+            } else if (!this._planState.plan) {
+              await this._loadPlan();
+            } else {
+              this._render();
+            }
+          },
+          onToggleWorkoutForm: () => {
+            this._workoutState.showForm = !this._workoutState.showForm;
+            this._render();
+          },
+          onSetTrainingDay: (opts) =>
+            this._withBusy(async () => {
+              await this._api.setTrainingDay(this._activePersonId, opts);
+              await this._loadDashboard();
+              await this._loadWorkouts();
+            }),
+          onSaveWorkout: (payload) =>
+            this._withBusy(async () => {
+              await this._api.saveWorkoutItem(this._activePersonId, payload);
+              this._workoutState.showForm = false;
+              await this._loadDashboard();
+              await this._loadWorkouts();
+              this._showInfoToast(t(this._uiState.language, "workouts_saved_ok"));
+            }),
+          onDeleteWorkout: (scheduleId) =>
+            this._withBusy(async () => {
+              await this._api.deleteWorkoutItem(this._activePersonId, scheduleId);
+              await this._loadDashboard();
+              await this._loadWorkouts();
+              this._showInfoToast(t(this._uiState.language, "workouts_deleted_ok"));
+            }),
+          onToggleGenerate: () => {
+            this._planState.showGenerateForm = !this._planState.showGenerateForm;
+            this._render();
+          },
+          onToggleSuggest: () => {
+            this._planState.showSuggestForm = !this._planState.showSuggestForm;
+            this._render();
+          },
+          onSelectDate: (d) => {
+            this._planState.selectedDate = d;
             this._planState.swappingItemId = null;
-            await this._loadPlan();
-            await this._loadDashboard();
-          }),
-        onSetFeedback: (title, rating) =>
-          this._withBusy(async () => {
-            await this._api.setMealFeedback(this._activePersonId, title, rating);
-            this._prefState.loaded = false;
-          }),
-        onRebalance: (opts) =>
-          this._withBusy(async () => {
-            await this._api.rebalanceToday(this._activePersonId, opts);
-            await this._loadPlan();
-            await this._loadDashboard();
-          }),
+            this._render();
+          },
+          onGeneratePlan: (opts) =>
+            this._withBusy(async () => {
+              const resp = await this._api.generatePlan(this._activePersonId, opts);
+              this._planState.plan = resp.plan || null;
+              this._planState.selectedDate = this._planState.plan?.days?.[0]?.plan_date || null;
+              this._planState.showGenerateForm = false;
+              await this._loadDashboard();
+            }),
+          onSuggestMeal: (opts) =>
+            this._withBusy(async () => {
+              const resp = await this._api.suggestMeal(this._activePersonId, opts);
+              this._planState.suggestions = resp.suggestions || [];
+              this._planState.suggestBudgetMode = opts.budget_mode || "auto";
+              this._planState.suggestMeta = {
+                target_macros: resp.target_macros || null,
+                budget_mode_used: resp.budget_mode_used || opts.budget_mode || "auto",
+                meal_slot: resp.meal_slot || opts.meal_slot || "",
+              };
+              this._planState.showSuggestForm = false;
+            }),
+          onLogSuggestion: (sug) =>
+            this._withBusy(async () => {
+              await this._api.logSuggestion(
+                this._activePersonId,
+                sug,
+                1.0,
+                this._dashboard?.date || null
+              );
+              this._planState.suggestions = [];
+              this._planState.suggestMeta = null;
+              await this._loadDashboard();
+            }),
+          onPromotePlanMeal: (planItemId, scale) =>
+            this._withBusy(async () => {
+              await this._api.promotePlanMeal(this._activePersonId, planItemId, scale);
+              await this._loadPlan();
+              await this._loadDashboard();
+            }),
+          onStartSwap: (itemId) => {
+            this._planState.swappingItemId = itemId;
+            this._render();
+          },
+          onSwapPlanMeal: (planItemId, instruction) =>
+            this._withBusy(async () => {
+              await this._api.swapPlanMeal(this._activePersonId, planItemId, instruction);
+              this._planState.swappingItemId = null;
+              await this._loadPlan();
+              await this._loadDashboard();
+            }),
+          onSetFeedback: (title, rating) =>
+            this._withBusy(async () => {
+              await this._api.setMealFeedback(this._activePersonId, title, rating);
+              this._prefState.loaded = false;
+            }),
+          onRebalance: (opts) =>
+            this._withBusy(async () => {
+              await this._api.rebalanceToday(this._activePersonId, opts);
+              await this._loadPlan();
+              await this._loadDashboard();
+            }),
+        },
+        this._workoutState
+      );
+    } else if (this._activeTab === "shopping") {
+      renderShoppingView(
+        viewHost,
+        this._shoppingState,
+        this._dashboard,
+        this._uiState,
+        this._persons.length,
+        {
+          onUpdateRange: (startDate, endDate) => {
+            if (startDate !== null) this._shoppingState.startDate = startDate;
+            if (endDate !== null) this._shoppingState.endDate = endDate;
+          },
+          onToggleHousehold: (val) => {
+            this._shoppingState.includeHousehold = Boolean(val);
+          },
+          onGenerateDraft: (opts) =>
+            this._withBusy(async () => {
+              this._shoppingState.lastCommitResult = null;
+              const resp = await this._api.generateShoppingDraft(
+                this._activePersonId,
+                opts
+              );
+              this._shoppingState.draft = resp.draft || null;
+              this._shoppingState.todoEntity =
+                resp.todo_entity || this._shoppingState.todoEntity;
+            }),
+          onUpdateItem: (draftId, itemId, patch) =>
+            this._withBusy(async () => {
+              const resp = await this._api.updateShoppingItem(
+                this._activePersonId,
+                draftId,
+                itemId,
+                patch
+              );
+              this._shoppingState.draft = resp.draft || this._shoppingState.draft;
+            }),
+          onAddItem: (payload) =>
+            this._withBusy(async () => {
+              const resp = await this._api.addShoppingItem(
+                this._activePersonId,
+                payload
+              );
+              this._shoppingState.draft = resp.draft || this._shoppingState.draft;
+            }),
+          onDeleteItem: (draftId, itemId) =>
+            this._withBusy(async () => {
+              const resp = await this._api.deleteShoppingItem(
+                this._activePersonId,
+                draftId,
+                itemId
+              );
+              this._shoppingState.draft = resp.draft || this._shoppingState.draft;
+            }),
+          onCommitDraft: (draftId) =>
+            this._withBusy(async () => {
+              const resp = await this._api.commitShoppingDraft(
+                this._activePersonId,
+                { draft_id: draftId }
+              );
+              this._shoppingState.draft = resp.draft || this._shoppingState.draft;
+              this._shoppingState.lastCommitResult = resp;
+            }),
+        }
+      );
+    } else if (this._activeTab === "trends") {
+      renderTrendsView(viewHost, this._trendsState, this._dashboard, this._uiState, {
+        onChangeDays: async (days) => {
+          this._trendsState.days = days;
+          await this._loadTrends(days);
+        },
+        onChangeMetric: (metric) => {
+          this._trendsState.weightMetric = metric;
+          this._render();
+        },
       });
     } else if (this._activeTab === "vault") {
       renderVaultView(

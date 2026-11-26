@@ -1,4 +1,4 @@
-/** WebSocket API client for ha-calories-buddy Lovelace card v0.2.6 */
+/** WebSocket API client for ha-calories-buddy Lovelace card v0.3.0 */
 
 export class CaloriesBuddyApi {
   constructor(hass) {
@@ -245,6 +245,85 @@ export class CaloriesBuddyApi {
     return this.call("parse_recipe_text", {
       ...(personId ? { person_id: personId } : {}),
       text,
+    });
+  }
+
+  getShoppingDraft(personId, includeCommitted = true) {
+    return this.call("get_shopping_draft", {
+      ...(personId ? { person_id: personId } : {}),
+      include_committed: includeCommitted,
+    });
+  }
+
+  generateShoppingDraft(personId, opts = {}) {
+    return this.call("generate_shopping_draft", {
+      ...(personId ? { person_id: personId } : {}),
+      ...opts,
+    });
+  }
+
+  updateShoppingItem(personId, draftId, draftItemId, patch = {}) {
+    return this.call("update_shopping_item", {
+      ...(personId ? { person_id: personId } : {}),
+      draft_id: draftId,
+      draft_item_id: draftItemId,
+      ...patch,
+    });
+  }
+
+  addShoppingItem(personId, itemPayload) {
+    return this.call("add_shopping_item", {
+      ...(personId ? { person_id: personId } : {}),
+      ...itemPayload,
+    });
+  }
+
+  deleteShoppingItem(personId, draftId, draftItemId) {
+    return this.call("delete_shopping_item", {
+      ...(personId ? { person_id: personId } : {}),
+      draft_id: draftId,
+      draft_item_id: draftItemId,
+    });
+  }
+
+  commitShoppingDraft(personId, opts = {}) {
+    return this.call("commit_shopping_draft", {
+      ...(personId ? { person_id: personId } : {}),
+      ...opts,
+    });
+  }
+
+  getTrends(personId, days = 30) {
+    return this.call("get_trends", {
+      ...(personId ? { person_id: personId } : {}),
+      days,
+    });
+  }
+
+  getWorkouts(personId) {
+    return this.call("get_workouts", {
+      ...(personId ? { person_id: personId } : {}),
+    });
+  }
+
+  saveWorkoutItem(personId, itemPayload) {
+    return this.call("save_workout_item", {
+      ...(personId ? { person_id: personId } : {}),
+      ...itemPayload,
+    });
+  }
+
+  deleteWorkoutItem(personId, scheduleId) {
+    return this.call("delete_workout_item", {
+      ...(personId ? { person_id: personId } : {}),
+      schedule_id: scheduleId,
+    });
+  }
+
+  setTrainingDay(personId, opts = {}) {
+    return this.call("set_training_day", {
+      ...(personId ? { person_id: personId } : {}),
+      ...opts,
     });
   }
 }
