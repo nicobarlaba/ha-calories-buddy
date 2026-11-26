@@ -293,7 +293,7 @@ export class CaloriesBuddyApi {
     });
   }
 
-  getTrends(personId, days = 30) {
+  getTrends(personId, days = 14) {
     return this.call("get_trends", {
       ...(personId ? { person_id: personId } : {}),
       days,

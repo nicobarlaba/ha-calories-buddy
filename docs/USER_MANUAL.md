@@ -227,7 +227,7 @@ HA Calories Buddy registers a native Home Assistant Assist `llm.API` (`HA Calori
 4. Click **Save to Global Vault** (instantly available to every household member) or **Save & Log Meal** to save and record a portion immediately.
 
 ### Two-Tier Food Vault (`Food Vault` Tab)
-- **Global Food Vault & Pagination:** Pre-seeded with 88 verified bilingual Italian/English staples (including paired raw & cooked variants with yield factors and fiber), plus every barcode scan or custom food you save. Filter across category chips (`All`, `Protein`, `Carbs`, `Legumes`, `Dairy`, `Produce`, `Fats`, `Other`) and browse the entire catalog with `Previous` / `Next` pagination controls.
+- **Global Food Vault & Pagination:** Pre-seeded with 280 verified bilingual Italian/English staples (oils, baking/pantry, dairy, cheeses, meats, deli, seafood, legumes, grains, vegetables, fruit, nuts, seeds, plus paired raw & cooked variants with yield factors, fiber, and household portions for the Card's smart unit selector), plus every barcode scan, USDA hit, or custom food you save. Filter across category chips (`All`, `Protein`, `Carbs`, `Legumes`, `Dairy`, `Produce`, `Fats`, `Other`) and browse the entire catalog with `Previous` / `Next` pagination controls.
 - **Personal Overrides:** Click **Edit** on any food to create a per-person override without affecting other family members:
   - Set a **Personal Alias** (e.g., *"My al dente basmati"*).
   - Customize macros (including **Fiber / 100g**) or your personal cooked/raw **Yield Factor**.

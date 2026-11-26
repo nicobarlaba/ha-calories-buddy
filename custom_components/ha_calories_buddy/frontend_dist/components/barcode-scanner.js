@@ -1,10 +1,18 @@
 /** Barcode Scanner, HTTP Photo Decoder & Manual EAN Lookup Modal */
 import { decodeBarcodeFromImageSource } from "./barcode-decoder.js";
 import { t } from "../i18n/index.js";
-import { escapeHtml, localizedFoodName, pickDefaultSlotForNow, round1 } from "../utils.js";
+import {
+  escapeHtml,
+  getDefaultUnitAndQty,
+  getUnitOptionsForFood,
+  localizedFoodName,
+  pickDefaultSlotForNow,
+  renderUnitSelectOptions,
+  round1,
+} from "../utils.js";
 
 export function openBarcodeScannerModal(host, ctx, callbacks) {
-  const { language, api, personId, mealSlots } = ctx;
+  const { language, api, personId, mealSlots, pickOnly } = ctx;
   const slots = mealSlots && mealSlots.length ? mealSlots : [{ name: "Breakfast" }, { name: "Lunch" }, { name: "Snack" }, { name: "Dinner" }];
   const hasNativeDetector = "BarcodeDetector" in window;
   const isSecure = window.isSecureContext || ["localhost", "127.0.0.1"].includes(window.location.hostname);
@@ -161,6 +169,12 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
           macros_per_100g: { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
         }
       : null);
+    const bcDefault = draft
+      ? getDefaultUnitAndQty(draft, { preferGramsForBulk: Boolean(pickOnly) })
+      : { unit: "g", quantity: 100 };
+    const bcUnitOpts = draft
+      ? getUnitOptionsForFood(draft, language, bcDefault.unit)
+      : [];
 
     host.innerHTML = `
       <div class="modal-backdrop">
@@ -233,25 +247,39 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
                   <label>${escapeHtml(t(language, "fiber"))} (g)</label>
                   <input type="number" step="0.1" id="bc-fib" value="${round1(draft.macros_per_100g.fiber_g || 0)}" />
                 </div>
-                <div class="form-field">
-                  <label>${escapeHtml(t(language, "quantity_label"))} (g)</label>
-                  <input type="number" step="1" min="1" id="bc-qty" value="100" />
-                </div>
-                <div class="form-field full">
-                  <label>${escapeHtml(t(language, "meal_slot_label"))}</label>
-                  <div class="quick-actions">
-                    ${slots
-                      .map(
-                        (s) =>
-                          `<button type="button" class="chip-btn bc-slot-chip ${chosenSlot === s.name ? "active" : ""}" data-slot="${escapeHtml(s.name)}">${escapeHtml(s.name)}</button>`
-                      )
-                      .join("")}
-                  </div>
-                </div>
+                ${
+                  pickOnly
+                    ? ""
+                    : `<div class="form-field">
+                         <label>${escapeHtml(t(language, "quantity_label"))}</label>
+                         <input type="number" step="0.5" min="0.1" id="bc-qty" value="${bcDefault.quantity}" />
+                       </div>
+                       <div class="form-field">
+                         <label>${escapeHtml(t(language, "unit_label"))}</label>
+                         <select id="bc-unit">
+                           ${renderUnitSelectOptions(bcUnitOpts, bcDefault.unit)}
+                         </select>
+                       </div>
+                       <div class="form-field full">
+                         <label>${escapeHtml(t(language, "meal_slot_label"))}</label>
+                         <div class="quick-actions">
+                           ${slots
+                             .map(
+                               (s) =>
+                                 `<button type="button" class="chip-btn bc-slot-chip ${chosenSlot === s.name ? "active" : ""}" data-slot="${escapeHtml(s.name)}">${escapeHtml(s.name)}</button>`
+                             )
+                             .join("")}
+                         </div>
+                       </div>`
+                }
               </div>
               <div class="meal-actions">
-                <button type="button" class="secondary" id="bc-save-global" ${saving ? "disabled" : ""}>${escapeHtml(t(language, "save_global_btn"))}</button>
-                <button type="button" class="success" id="bc-save-and-log" ${saving ? "disabled" : ""}>${escapeHtml(t(language, "save_and_log_btn"))}</button>
+                ${
+                  pickOnly
+                    ? `<button type="button" class="success" id="bc-pick-use" ${saving ? "disabled" : ""}>${escapeHtml(t(language, "save_global_btn"))}</button>`
+                    : `<button type="button" class="secondary" id="bc-save-global" ${saving ? "disabled" : ""}>${escapeHtml(t(language, "save_global_btn"))}</button>
+                       <button type="button" class="success" id="bc-save-and-log" ${saving ? "disabled" : ""}>${escapeHtml(t(language, "save_and_log_btn"))}</button>`
+                }
               </div>
             </div>
           `
@@ -328,6 +356,28 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
       }
     });
 
+    host.querySelector("#bc-pick-use")?.addEventListener("click", async () => {
+      if (saving) return;
+      if (foundFood && foundFood.food_id) {
+        const picked = foundFood;
+        closeModal();
+        await callbacks.onSelectFood?.(picked);
+        return;
+      }
+      saving = true;
+      statusMsg = "";
+      render();
+      try {
+        const saved = await api.saveFood(personId, collectFoodPayload());
+        closeModal();
+        await callbacks.onSelectFood?.(saved?.food || null);
+      } catch (err) {
+        saving = false;
+        statusMsg = err?.message || t(language, "save_failed");
+        render();
+      }
+    });
+
     host.querySelector("#bc-save-and-log")?.addEventListener("click", async () => {
       if (saving) return;
       saving = true;
@@ -336,12 +386,13 @@ export function openBarcodeScannerModal(host, ctx, callbacks) {
       try {
         const saved = await api.saveFood(personId, collectFoodPayload());
         const qty = Number(host.querySelector("#bc-qty")?.value || 100);
+        const unit = (host.querySelector("#bc-unit")?.value || "g").trim();
         closeModal();
         await callbacks.onLogFood({
           food_id: saved.food.food_id,
           name: saved.food.name,
           quantity: qty,
-          unit: "g",
+          unit,
           state: saved.food.preparation_state,
           meal_slot: chosenSlot,
         });

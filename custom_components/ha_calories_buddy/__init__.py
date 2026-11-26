@@ -12,6 +12,9 @@ from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import slugify
 
+from custom_components.ha_calories_buddy.biometrics_backfill import (
+    async_ensure_biometrics_backfilled,
+)
 from custom_components.ha_calories_buddy.config_flow import merged_entry_config
 from custom_components.ha_calories_buddy.const import (
     CONF_ACTIVE_KCAL_ENTITY,
@@ -479,15 +482,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
     coordinator.setup_listeners()
 
-    runtime.persons[profile.person_id] = PersonRuntimeData(
+    person_rt = PersonRuntimeData(
         entry_id=entry.entry_id,
         person_id=profile.person_id,
         profile=profile,
         llm_config=llm_ovr,
         coordinator=coordinator,
     )
+    runtime.persons[profile.person_id] = person_rt
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    hass.async_create_task(
+        async_ensure_biometrics_backfilled(hass, runtime, person_rt, days=90)
+    )
     log_event(
         _LOGGER,
         logging.INFO,

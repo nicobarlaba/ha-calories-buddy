@@ -39,9 +39,11 @@ from custom_components.ha_calories_buddy.core.models import (
     WorkoutActivityType,
     WorkoutScheduleItem,
 )
+from custom_components.ha_calories_buddy.core.nutrition.resolver import FoodResolver
 from custom_components.ha_calories_buddy.core.physiology.targets import TargetResult
 from custom_components.ha_calories_buddy.core.physiology.tdee import (
     calculate_adaptive_tdee,
+    recompute_biometric_emas,
     update_ema,
 )
 from custom_components.ha_calories_buddy.core.physiology.trends import (
@@ -661,3 +663,151 @@ async def test_workouts_repo_baseline_notes_and_trends(
     assert summary.expected_vs_actual.status == "on_track"
     assert summary.expected_vs_actual.eta_date is not None
     assert summary.points[-1].lean_mass_kg is not None
+
+    # Default trends window is now 14 days (2 weeks), normalized cleanly
+    summary_default = build_trends_summary(
+        profile=marco,
+        snapshots=snaps,
+        daily_macros=macros_map,
+        current_tdee=tdee_now,
+        current_targets=TargetResult(
+            target_kcal=1950.0,
+            protein_g=160.0,
+            carbs_g=190.0,
+            fat_g=60.0,
+            fiber_g=27.3,
+            mode=TargetMode.PHYSIOLOGY,
+        ),
+        today=today,
+    )
+    assert summary_default.days == 14
+    assert len(summary_default.points) == 14
+    assert summary_default.points[-1].point_date == today
+    assert summary_default.points[0].point_date == today - timedelta(days=13)
+
+
+def _load_seed_items() -> list[dict[str, Any]]:
+    seed_path = (
+        Path(__file__).resolve().parents[2]
+        / "custom_components"
+        / "ha_calories_buddy"
+        / "core"
+        / "storage"
+        / "seed_foods.json"
+    )
+    return list(json.loads(seed_path.read_text(encoding="utf-8")))
+
+
+async def test_seed_foods_integrity_usda_search_and_non_destructive_backfill(
+    phase3_ctx: dict[str, Any],
+) -> None:
+    """Verify expanded 280-food seed catalog Atwater integrity, USDA search fallback, and non-destructive backfill."""
+    items = _load_seed_items()
+    assert len(items) >= 280
+    ids = [str(it["food_id"]) for it in items]
+    assert len(ids) == len(set(ids))
+    assert "seed_sunflower_oil" in ids
+    assert "seed_flour_00" in ids
+
+    for row in items:
+        assert row.get("name") and row.get("name_it")
+        p = float(row["protein_g"])
+        c = float(row["carbs_g"])
+        f = float(row["fat_g"])
+        fib = float(row.get("fiber_g") or 0.0)
+        k = float(row["kcal"])
+        assert p >= 0.0 and c >= 0.0 and f >= 0.0 and fib >= 0.0 and k >= 0.0
+        assert float(row.get("yield_factor", 1.0)) > 0.0
+        if str(row["food_id"]) != "seed_white_wine_cooking":
+            atw = 4.0 * p + 4.0 * c + 9.0 * f + 2.0 * fib
+            assert abs(k - atw) <= max(18.0, 0.15 * max(atw, k)), (row["food_id"], k, atw)
+
+    # Non-destructive biometric backfill & chronological EMA recomputation
+    profile_repo: ProfileRepository = phase3_ctx["profile_repo"]
+    today = date.today()
+    manual_d = today - timedelta(days=3)
+    await profile_repo.upsert_biometric_snapshot(
+        BiometricSnapshot(
+            snapshot_id="manual_snap",
+            person_id="p_marco",
+            snap_date=manual_d,
+            weight_kg=80.0,  # Manual value must NOT be overwritten
+            active_kcal=None,
+        )
+    )
+    written = await profile_repo.backfill_biometric_snapshots(
+        "p_marco",
+        [
+            BiometricSnapshot(
+                snapshot_id="bf_1",
+                person_id="p_marco",
+                snap_date=today - timedelta(days=6),
+                weight_kg=81.0,
+                body_fat_pct=20.0,
+            ),
+            BiometricSnapshot(
+                snapshot_id="bf_2",
+                person_id="p_marco",
+                snap_date=manual_d,
+                weight_kg=75.0,  # Ignored because manual weight_kg=80.0 already exists!
+                active_kcal=420.0,  # Filled because existing active_kcal was NULL!
+            ),
+        ],
+    )
+    assert written == 2
+    loaded_snaps = await profile_repo.get_biometric_snapshots_range(
+        "p_marco", today - timedelta(days=10), today
+    )
+    manual_after = next(s for s in loaded_snaps if s.snap_date == manual_d)
+    assert manual_after.weight_kg == pytest.approx(80.0)
+    assert manual_after.active_kcal == pytest.approx(420.0)
+
+    changed = recompute_biometric_emas(loaded_snaps)
+    assert len(changed) == 2
+    await profile_repo.update_biometric_emas(changed)
+    loaded_after_ema = await profile_repo.get_biometric_snapshots_range(
+        "p_marco", today - timedelta(days=10), today
+    )
+    assert loaded_after_ema[-1].weight_ema_kg == pytest.approx(
+        round(0.12 * 80.0 + 0.88 * 81.0, 2)
+    )
+
+    # Interactive search falls back to USDA when local + OFF leave spare slots
+    class _FakeOFF:
+        async def lookup_barcode(self, ean: str) -> FoodItem | None:
+            return None
+
+        async def search(self, query: str, brand: str | None = None, language: str = "en", limit: int = 5) -> list[FoodItem]:
+            return []
+
+    class _FakeUSDA:
+        enabled = True
+
+        async def lookup_barcode(self, ean: str) -> FoodItem | None:
+            return None
+
+        async def search(self, query: str, brand: str | None = None, language: str = "en", limit: int = 5) -> list[FoodItem]:
+            return [
+                FoodItem(
+                    food_id="usda_custom_test_1",
+                    name="Uncommon Test Spice Mix",
+                    normalized_name="uncommon test spice mix",
+                    category="other",
+                    preparation_state=PreparationState.READY_TO_EAT,
+                    macros_per_100g=Macros(kcal=250, protein_g=10, carbs_g=40, fat_g=5, fiber_g=8),
+                    label_standard=LabelStandard.US,
+                    source=FoodSource.USDA,
+                    verified=True,
+                )
+            ]
+
+    resolver_usda = FoodResolver(
+        phase3_ctx["food_repo"],
+        off_provider=_FakeOFF(),
+        usda_provider=_FakeUSDA(),
+    )
+    hits, total = await resolver_usda.search_foods_paginated(
+        "uncommon test spice", person_id="p_marco", include_external=True, limit=10
+    )
+    assert total == 1
+    assert len(hits) == 1 and hits[0].food_id == "usda_custom_test_1"

@@ -165,6 +165,79 @@ class ProfileRepository:
         )
         return [self._row_to_snapshot(row) for row in rows]
 
+    async def backfill_biometric_snapshots(
+        self,
+        person_id: str,
+        snapshots: list[BiometricSnapshot] | tuple[BiometricSnapshot, ...],
+    ) -> int:
+        """Non-destructively backfill missing biometric dates/columns without overwriting manual data."""
+        if not snapshots:
+            return 0
+        async with self._db.transaction() as conn:
+            for snap in snapshots:
+                await conn.execute(
+                    """
+                    INSERT INTO biometric_snapshots (
+                        snapshot_id, person_id, snap_date, weight_kg, weight_ema_kg,
+                        body_fat_pct, body_fat_ema_pct, active_kcal, total_kcal, steps,
+                        computed_tdee, target_kcal, adaptive_tdee_kcal, wearable_multiplier_used
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(person_id, snap_date) DO UPDATE SET
+                        weight_kg = COALESCE(biometric_snapshots.weight_kg, excluded.weight_kg),
+                        weight_ema_kg = COALESCE(biometric_snapshots.weight_ema_kg, excluded.weight_ema_kg),
+                        body_fat_pct = COALESCE(biometric_snapshots.body_fat_pct, excluded.body_fat_pct),
+                        body_fat_ema_pct = COALESCE(biometric_snapshots.body_fat_ema_pct, excluded.body_fat_ema_pct),
+                        active_kcal = COALESCE(biometric_snapshots.active_kcal, excluded.active_kcal),
+                        total_kcal = COALESCE(biometric_snapshots.total_kcal, excluded.total_kcal),
+                        steps = COALESCE(biometric_snapshots.steps, excluded.steps),
+                        computed_tdee = COALESCE(biometric_snapshots.computed_tdee, excluded.computed_tdee),
+                        target_kcal = COALESCE(biometric_snapshots.target_kcal, excluded.target_kcal),
+                        adaptive_tdee_kcal = COALESCE(biometric_snapshots.adaptive_tdee_kcal, excluded.adaptive_tdee_kcal),
+                        wearable_multiplier_used = COALESCE(biometric_snapshots.wearable_multiplier_used, excluded.wearable_multiplier_used)
+                    """,
+                    (
+                        snap.snapshot_id,
+                        person_id,
+                        snap.snap_date.isoformat(),
+                        snap.weight_kg,
+                        snap.weight_ema_kg,
+                        snap.body_fat_pct,
+                        snap.body_fat_ema_pct,
+                        snap.active_kcal,
+                        snap.total_kcal,
+                        snap.steps,
+                        snap.computed_tdee,
+                        snap.target_kcal,
+                        snap.adaptive_tdee_kcal,
+                        snap.wearable_multiplier_used,
+                    ),
+                )
+        return len(snapshots)
+
+    async def update_biometric_emas(
+        self,
+        snapshots: list[BiometricSnapshot] | tuple[BiometricSnapshot, ...],
+    ) -> int:
+        """Persist updated weight_ema_kg and body_fat_ema_pct for existing biometric rows."""
+        if not snapshots:
+            return 0
+        async with self._db.transaction() as conn:
+            for snap in snapshots:
+                await conn.execute(
+                    """
+                    UPDATE biometric_snapshots
+                    SET weight_ema_kg = ?, body_fat_ema_pct = ?
+                    WHERE person_id = ? AND snap_date = ?
+                    """,
+                    (
+                        snap.weight_ema_kg,
+                        snap.body_fat_ema_pct,
+                        snap.person_id,
+                        snap.snap_date.isoformat(),
+                    ),
+                )
+        return len(snapshots)
+
     async def get_adaptive_state(self, person_id: str) -> AdaptiveState | None:
         """Fetch persisted closed-loop Adaptive TDEE state for a person."""
         row = await self._db.fetch_one(

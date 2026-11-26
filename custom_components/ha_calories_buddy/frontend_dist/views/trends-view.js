@@ -1,12 +1,30 @@
-/** Trends View: 7/30/90d Native SVG Charts, Expected vs Actual KPI & Adaptive TDEE */
+/** Trends View: 7/14/30/90d Native SVG Charts, Expected vs Actual KPI & Adaptive TDEE */
 import { t } from "../i18n/index.js";
 import { escapeHtml, round1 } from "../utils.js";
 
-function renderCaloriesSvg(points) {
+function formatAxisDate(isoDate, lang = "en") {
+  const s = String(isoDate || "");
+  if (s.length < 10) return s;
+  const mm = s.slice(5, 7);
+  const dd = s.slice(8, 10);
+  return lang === "it" ? `${dd}/${mm}` : `${mm}/${dd}`;
+}
+
+function buildTickIndices(n) {
+  if (n <= 1) return [0];
+  const targetTicks = n <= 7 ? Math.min(n, 4) : 5;
+  const set = new Set([0, n - 1]);
+  for (let i = 1; i < targetTicks - 1; i++) {
+    set.add(Math.round((i * (n - 1)) / (targetTicks - 1)));
+  }
+  return Array.from(set).sort((a, b) => a - b);
+}
+
+function renderCaloriesSvg(points, lang = "en") {
   const w = 600;
   const h = 178;
   const padL = 38;
-  const padR = 12;
+  const padR = 14;
   const padT = 14;
   const padB = 26;
   const plotW = w - padL - padR;
@@ -48,9 +66,10 @@ function renderCaloriesSvg(points) {
       }
       const barH = kcal > 0 ? Math.max(2, padT + plotH - yOf(kcal)) : 1.5;
       const y = kcal > 0 ? yOf(kcal) : padT + plotH - 1.5;
+      const lblDate = formatAxisDate(p.point_date, lang) + (idx === n - 1 ? ` (${t(lang, "trends_today_label")})` : "");
       return `
         <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" rx="2" fill="${fill}">
-          <title>${escapeHtml(p.point_date)}: ${Math.round(kcal)} kcal${tgt ? ` / ${Math.round(tgt)} kcal` : ""}</title>
+          <title>${escapeHtml(lblDate)}: ${Math.round(kcal)} kcal${tgt ? ` / ${Math.round(tgt)} kcal` : ""}</title>
         </rect>
       `;
     })
@@ -64,13 +83,12 @@ function renderCaloriesSvg(points) {
     )
     .filter(Boolean);
 
-  const labelIdx = [0, Math.floor((n - 1) / 2), n - 1].filter(
-    (v, i, a) => a.indexOf(v) === i && points[v]
-  );
+  const labelIdx = buildTickIndices(n).filter((v) => points[v]);
   const xLabels = labelIdx
     .map((idx) => {
       const cx = padL + idx * stepX + stepX / 2;
-      return `<text x="${cx.toFixed(1)}" y="${h - 6}" text-anchor="middle" fill="var(--secondary-text-color)" font-size="9">${escapeHtml(String(points[idx].point_date).slice(5))}</text>`;
+      const txt = formatAxisDate(points[idx].point_date, lang);
+      return `<text x="${cx.toFixed(1)}" y="${h - 6}" text-anchor="middle" fill="var(--secondary-text-color)" font-size="9">${escapeHtml(txt)}</text>`;
     })
     .join("");
 
@@ -88,7 +106,7 @@ function renderCaloriesSvg(points) {
   `;
 }
 
-function renderLineChartSvg(points, seriesConfig) {
+function renderLineChartSvg(points, seriesConfig, lang = "en") {
   const w = 600;
   const h = 176;
   const padL = 42;
@@ -145,9 +163,10 @@ function renderLineChartSvg(points, seriesConfig) {
         .map((p, idx) => {
           const val = p[seriesConfig.rawKey];
           if (typeof val !== "number" || !Number.isFinite(val)) return "";
+          const lblDate = formatAxisDate(p.point_date, lang) + (idx === n - 1 ? ` (${t(lang, "trends_today_label")})` : "");
           return `
             <circle cx="${xOf(idx).toFixed(1)}" cy="${yOf(val).toFixed(1)}" r="3" fill="${seriesConfig.rawColor}" opacity="0.55">
-              <title>${escapeHtml(p.point_date)}: ${round1(val)} ${escapeHtml(seriesConfig.unit)}</title>
+              <title>${escapeHtml(lblDate)}: ${round1(val)} ${escapeHtml(seriesConfig.unit)}</title>
             </circle>
           `;
         })
@@ -166,21 +185,20 @@ function renderLineChartSvg(points, seriesConfig) {
     .map((p, idx) => {
       const val = p[seriesConfig.lineKey];
       if (typeof val !== "number" || !Number.isFinite(val)) return "";
+      const lblDate = formatAxisDate(p.point_date, lang) + (idx === n - 1 ? ` (${t(lang, "trends_today_label")})` : "");
       return `
         <circle cx="${xOf(idx).toFixed(1)}" cy="${yOf(val).toFixed(1)}" r="3.2" fill="${seriesConfig.lineColor}">
-          <title>${escapeHtml(p.point_date)}: ${round1(val)} ${escapeHtml(seriesConfig.unit)}</title>
+          <title>${escapeHtml(lblDate)}: ${round1(val)} ${escapeHtml(seriesConfig.unit)}</title>
         </circle>
       `;
     })
     .join("");
 
-  const labelIdx = [0, Math.floor((n - 1) / 2), n - 1].filter(
-    (v, i, a) => a.indexOf(v) === i && points[v]
-  );
+  const labelIdx = buildTickIndices(n).filter((v) => points[v]);
   const xLabels = labelIdx
     .map(
       (idx) =>
-        `<text x="${xOf(idx).toFixed(1)}" y="${h - 6}" text-anchor="middle" fill="var(--secondary-text-color)" font-size="9">${escapeHtml(String(points[idx].point_date).slice(5))}</text>`
+        `<text x="${xOf(idx).toFixed(1)}" y="${h - 6}" text-anchor="middle" fill="var(--secondary-text-color)" font-size="9">${escapeHtml(formatAxisDate(points[idx].point_date, lang))}</text>`
     )
     .join("");
 
@@ -217,7 +235,7 @@ export function renderTrendsView(
   callbacks
 ) {
   const lang = uiState.language;
-  const days = trendsState.days || 30;
+  const days = trendsState.days || 14;
   const summary = trendsState.summary || null;
   const metric = trendsState.weightMetric || "weight";
 
@@ -271,6 +289,7 @@ export function renderTrendsView(
   container.innerHTML = `
     <div class="subtab-bar">
       <button type="button" class="subtab-btn trends-days-btn ${days === 7 ? "active" : ""}" data-days="7">${escapeHtml(t(lang, "trends_7d"))}</button>
+      <button type="button" class="subtab-btn trends-days-btn ${days === 14 ? "active" : ""}" data-days="14">${escapeHtml(t(lang, "trends_14d"))}</button>
       <button type="button" class="subtab-btn trends-days-btn ${days === 30 ? "active" : ""}" data-days="30">${escapeHtml(t(lang, "trends_30d"))}</button>
       <button type="button" class="subtab-btn trends-days-btn ${days === 90 ? "active" : ""}" data-days="90">${escapeHtml(t(lang, "trends_90d"))}</button>
     </div>
@@ -330,7 +349,7 @@ export function renderTrendsView(
           <span>🔥 ${escapeHtml(t(lang, "trends_kcal_chart_title"))}</span>
           <span class="hint-text">${Math.round(summary.kcal_adherence_pct)}% ${escapeHtml(t(lang, "target"))}</span>
         </div>
-        ${renderCaloriesSvg(points)}
+        ${renderCaloriesSvg(points, lang)}
       </div>
 
       <div class="chart-card">
@@ -346,7 +365,7 @@ export function renderTrendsView(
             }
           </div>
         </div>
-        ${renderLineChartSvg(points, activeMetricCfg)}
+        ${renderLineChartSvg(points, activeMetricCfg, lang)}
         <div class="hint-text" style="display:flex;gap:12px;margin-top:4px;">
           ${activeMetricCfg.rawKey ? `<span>● ${escapeHtml(t(lang, "trends_raw_label"))}</span>` : ""}
           <span>━ ${escapeHtml(t(lang, "trends_ema_label"))}</span>
@@ -360,15 +379,19 @@ export function renderTrendsView(
                <div class="chart-header">
                  <span>⚡ ${escapeHtml(t(lang, "trends_tdee_chart_title"))}</span>
                </div>
-               ${renderLineChartSvg(points, {
-                 rawKey: null,
-                 lineKey: "tdee_kcal",
-                 valueKeys: ["tdee_kcal"],
-                 rawColor: "#ab47bc",
-                 lineColor: "#ab47bc",
-                 unit: "kcal",
-                 goalLine: null,
-               })}
+               ${renderLineChartSvg(
+                 points,
+                 {
+                   rawKey: null,
+                   lineKey: "tdee_kcal",
+                   valueKeys: ["tdee_kcal"],
+                   rawColor: "#ab47bc",
+                   lineColor: "#ab47bc",
+                   unit: "kcal",
+                   goalLine: null,
+                 },
+                 lang
+               )}
              </div>`
           : ""
       }

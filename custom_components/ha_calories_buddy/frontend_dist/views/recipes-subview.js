@@ -1,31 +1,28 @@
-/** Homemade Composite Recipes Sub-View: CRUD editor, live nutrition preview, AI text import, 1-tap log */
+/** Homemade Composite Recipes Sub-View: CRUD editor, inline re-association, live nutrition preview, AI text import, 1-tap log */
 import { t } from "../i18n/index.js";
 import {
   escapeHtml,
+  estimateGramsForFoodUnit,
+  getDefaultUnitAndQty,
+  getUnitOptionsForFood,
+  isRecipeItem,
   localizedFoodName,
   pickDefaultSlotForNow,
+  renderRecipeBadge,
+  renderUnitSelectOptions,
   round1,
 } from "../utils.js";
-
-const UNIT_FACTORS_G = {
-  g: 1,
-  kg: 1000,
-  oz: 28.3495,
-  lb: 453.592,
-  ml: 1,
-  l: 1000,
-};
 
 function estimateIngGrams(ing) {
   const qty = Number(ing.quantity || 0);
   if (qty <= 0) return 0;
   const u = String(ing.unit || "g").trim().toLowerCase();
-  if (u in UNIT_FACTORS_G) {
-    const dense = ing.category === "oil" && (u === "ml" || u === "l") ? 0.92 : 1.0;
-    return qty * UNIT_FACTORS_G[u] * dense;
-  }
-  if (ing.food_portions && typeof ing.food_portions[u] === "number") {
-    return qty * ing.food_portions[u];
+  if (
+    ["g", "kg", "oz", "lb", "ml", "l"].includes(u) ||
+    (ing.food_portions && typeof ing.food_portions[u] === "number") ||
+    (ing.person_portions && typeof ing.person_portions[u] === "number")
+  ) {
+    return estimateGramsForFoodUnit(qty, u, ing);
   }
   if (ing.grams_estimate && Number(ing.base_quantity || 0) > 0) {
     return (qty / Number(ing.base_quantity)) * Number(ing.grams_estimate);
@@ -33,12 +30,7 @@ function estimateIngGrams(ing) {
   if (ing.grams_estimate && qty === Number(ing.quantity)) {
     return Number(ing.grams_estimate);
   }
-  if (u === "tbsp") return qty * 12;
-  if (u === "tsp") return qty * 5;
-  if (u === "cup") return qty * 200;
-  if (u === "piece") return qty * 55;
-  if (u === "slice") return qty * 30;
-  return qty * 100;
+  return estimateGramsForFoodUnit(qty, u, ing);
 }
 
 function computeDraftPreview(draft) {
@@ -119,33 +111,78 @@ export function renderRecipesSubview(container, recipeState, dashboard, uiState,
     ingredients: [],
   };
 
+  let reassocIdx = null;
+
+  const renderIngSubHtml = (ing) => {
+    const parts = [];
+    if (ing.macros_per_100g) {
+      parts.push(`${Math.round(ing.macros_per_100g.kcal || 0)} kcal/100g`);
+    } else {
+      parts.push(t(lang, "recipe_unmatched_hint"));
+    }
+    if (ing.matched_brand) parts.push(ing.matched_brand);
+    if (
+      ing.raw_name &&
+      String(ing.raw_name).trim().toLowerCase() !== String(ing.name || "").trim().toLowerCase()
+    ) {
+      parts.push(`${t(lang, "recipe_ai_parsed_from")}: "${ing.raw_name}"`);
+    }
+    return `<div class="recipe-ing-sub">${escapeHtml(parts.join(" · "))}</div>`;
+  };
+
   const renderIngRowsHtml = () => {
     const ings = draft.ingredients || [];
     if (!ings.length) {
       return `<div class="hint-text" style="margin: 6px 0;">${escapeHtml(t(lang, "recipe_ing_search_placeholder"))}</div>`;
     }
     return ings
-      .map(
-        (ing, idx) => `
-        <div class="recipe-ing-row">
-          <div style="flex: 1; min-width: 140px;">
-            <strong>${escapeHtml(ing.name)}</strong>
-            ${ing.food_id ? `<span class="pill good">✓</span>` : `<span class="pill warn">⚠️</span>`}
+      .map((ing, idx) => {
+        const unitOpts = getUnitOptionsForFood(ing, lang, ing.unit || "g");
+        const isReassoc = reassocIdx === idx;
+        return `
+        <div class="recipe-ing-row" style="flex-direction: column; align-items: stretch;">
+          <div class="controls-row" style="justify-content: space-between; width: 100%;">
+            <div style="flex: 1; min-width: 150px;">
+              <div>
+                <strong>${escapeHtml(ing.name)}</strong>
+                ${ing.food_id ? `<span class="pill good">✓</span>` : `<span class="pill warn">⚠️</span>`}
+              </div>
+              ${renderIngSubHtml(ing)}
+            </div>
+            <div class="controls-row">
+              <input type="number" step="0.5" min="0.1" class="rec-ing-qty" data-idx="${idx}" value="${escapeHtml(ing.quantity)}" style="width: 66px;" />
+              <select class="rec-ing-unit" data-idx="${idx}">
+                ${renderUnitSelectOptions(unitOpts, ing.unit || "g")}
+              </select>
+              <select class="rec-ing-state" data-idx="${idx}">
+                <option value="ready_to_eat" ${ing.state === "ready_to_eat" ? "selected" : ""}>${escapeHtml(t(lang, "state_ready_to_eat"))}</option>
+                <option value="raw" ${ing.state === "raw" ? "selected" : ""}>${escapeHtml(t(lang, "state_raw"))}</option>
+                <option value="cooked" ${ing.state === "cooked" ? "selected" : ""}>${escapeHtml(t(lang, "state_cooked"))}</option>
+                <option value="unspecified" ${!ing.state || ing.state === "unspecified" ? "selected" : ""}>${escapeHtml(t(lang, "state_unspecified"))}</option>
+              </select>
+              <button type="button" class="secondary rec-ing-reassoc-btn" data-idx="${idx}" title="${escapeHtml(t(lang, "recipe_reassociate_btn"))}">🔄</button>
+              <button type="button" class="icon-danger-btn rec-ing-del" data-idx="${idx}">✕</button>
+            </div>
           </div>
-          <div class="controls-row">
-            <input type="number" step="0.5" min="0.1" class="rec-ing-qty" data-idx="${idx}" value="${escapeHtml(ing.quantity)}" style="width: 68px;" />
-            <input type="text" class="rec-ing-unit" data-idx="${idx}" value="${escapeHtml(ing.unit || "g")}" style="width: 58px;" />
-            <select class="rec-ing-state" data-idx="${idx}">
-              <option value="ready_to_eat" ${ing.state === "ready_to_eat" ? "selected" : ""}>${escapeHtml(t(lang, "state_ready_to_eat"))}</option>
-              <option value="raw" ${ing.state === "raw" ? "selected" : ""}>${escapeHtml(t(lang, "state_raw"))}</option>
-              <option value="cooked" ${ing.state === "cooked" ? "selected" : ""}>${escapeHtml(t(lang, "state_cooked"))}</option>
-              <option value="unspecified" ${!ing.state || ing.state === "unspecified" ? "selected" : ""}>${escapeHtml(t(lang, "state_unspecified"))}</option>
-            </select>
-            <button type="button" class="icon-danger-btn rec-ing-del" data-idx="${idx}">✕</button>
-          </div>
+          ${
+            isReassoc
+              ? `
+            <div class="recipe-reassoc-box">
+              <div class="quick-input-row">
+                <input type="text" id="rec-reassoc-search" value="${escapeHtml(ing.raw_name || ing.name || "")}" placeholder="${escapeHtml(t(lang, "recipe_reassociate_placeholder"))}" />
+                <button type="button" class="secondary" id="rec-reassoc-local-btn">🔍</button>
+                <button type="button" class="secondary" id="rec-reassoc-online-btn">${escapeHtml(t(lang, "recipe_search_online_btn"))}</button>
+                <button type="button" class="secondary" id="rec-reassoc-barcode-btn">📷</button>
+                <button type="button" class="secondary" id="rec-reassoc-close-btn">✕</button>
+              </div>
+              <div id="rec-reassoc-results" class="edit-food-results" style="margin-top: 6px;"></div>
+            </div>
+          `
+              : ""
+          }
         </div>
-      `
-      )
+      `;
+      })
       .join("");
   };
 
@@ -251,6 +288,8 @@ export function renderRecipesSubview(container, recipeState, dashboard, uiState,
           <div class="quick-input-row">
             <input type="text" id="rec-ing-search" placeholder="${escapeHtml(t(lang, "recipe_ing_search_placeholder"))}" />
             <button type="button" class="secondary" id="rec-ing-search-btn">🔍</button>
+            <button type="button" class="secondary" id="rec-ing-online-btn">${escapeHtml(t(lang, "recipe_search_online_btn"))}</button>
+            <button type="button" class="secondary" id="rec-ing-barcode-btn">📷</button>
           </div>
           <div id="rec-ing-results" class="edit-food-results"></div>
         </div>
@@ -279,7 +318,7 @@ export function renderRecipesSubview(container, recipeState, dashboard, uiState,
                     <div class="meal-header">
                       <span>
                         📖 ${escapeHtml(rec.name)}
-                        <span class="pill">${escapeHtml(t(lang, "recipe_badge"))}</span>
+                        ${renderRecipeBadge(lang)}
                         ${rec.allow_in_planner ? `<span class="pill good">📅 ${escapeHtml(t(lang, "recipe_planner_badge"))}</span>` : ""}
                       </span>
                       <span>${Math.round(rec.macros_per_serving?.kcal || 0)} kcal / ${escapeHtml(unitLbl)}</span>
@@ -372,6 +411,116 @@ export function renderRecipesSubview(container, recipeState, dashboard, uiState,
     if (host) host.innerHTML = renderPreviewHtml();
   };
 
+  const applyPickedFoodToIng = (f, existingIng = null) => {
+    const defState = ["raw", "cooked", "ready_to_eat"].includes(f.preparation_state)
+      ? f.preparation_state
+      : "ready_to_eat";
+    const defUnitQty = existingIng
+      ? {
+          quantity: Number(existingIng.quantity || 100),
+          unit: existingIng.unit || "g",
+        }
+      : getDefaultUnitAndQty(f, { preferGramsForBulk: true });
+    return {
+      food_id: f.food_id,
+      raw_name: existingIng?.raw_name || null,
+      name: localizedFoodName(f, lang),
+      matched_brand: f.brand || null,
+      quantity: defUnitQty.quantity,
+      unit: defUnitQty.unit,
+      state: defState,
+      base_quantity: defUnitQty.quantity,
+      grams_estimate: existingIng?.grams_estimate || null,
+      macros_per_100g: f.macros_per_100g || null,
+      yield_factor: f.yield_factor || 1.0,
+      ref_state: f.preparation_state || "ready_to_eat",
+      food_portions: f.food_portions || {},
+      person_portions: f.person_portions || {},
+      category: f.category || "other",
+    };
+  };
+
+  const wireRecipeFoodLookup = ({
+    input,
+    searchBtn,
+    onlineBtn,
+    barcodeBtn,
+    resultsHost,
+    freeTextKey,
+    onPickFood,
+    onPickFreeText,
+  }) => {
+    if (!input || !resultsHost || !callbacks.api) return;
+    let timer = null;
+    const runSearch = async (includeExternal = false) => {
+      const q = (input.value || "").trim();
+      if (q.length < 2) {
+        resultsHost.innerHTML = "";
+        return;
+      }
+      try {
+        const resp = await callbacks.api.searchFoods(
+          personId,
+          q,
+          includeExternal,
+          { limit: includeExternal ? 12 : 8 }
+        );
+        const hits = resp?.foods || [];
+        const hitsHtml = hits
+          .map(
+            (f, idx) => `
+            <button type="button" class="edit-food-option rec-lookup-pick" data-hit-idx="${idx}">
+              <span>
+                <strong>${escapeHtml(localizedFoodName(f, lang))}</strong>
+                ${f.brand ? ` <span class="pill">${escapeHtml(f.brand)}</span>` : ""}
+                ${isRecipeItem(f) ? ` ${renderRecipeBadge(lang)}` : ""}
+              </span>
+              <span class="meal-item-meta">${Math.round(f.macros_per_100g?.kcal || 0)} kcal · ${escapeHtml(t(lang, `state_${f.preparation_state}`) || f.preparation_state)}</span>
+            </button>
+          `
+          )
+          .join("");
+        const freeBtnHtml = `
+          <button type="button" class="edit-food-option rec-lookup-freetext">
+            <span><strong>${escapeHtml(t(lang, freeTextKey, { name: q }))}</strong></span>
+            <span class="pill warn">AI</span>
+          </button>
+        `;
+        resultsHost.innerHTML = hitsHtml + freeBtnHtml;
+        resultsHost.querySelectorAll(".rec-lookup-pick").forEach((optBtn) => {
+          optBtn.addEventListener("click", () => {
+            const f = hits[Number(optBtn.getAttribute("data-hit-idx"))];
+            if (f) onPickFood(f);
+          });
+        });
+        resultsHost
+          .querySelector(".rec-lookup-freetext")
+          ?.addEventListener("click", () => {
+            onPickFreeText(q);
+          });
+      } catch (_err) {
+        resultsHost.innerHTML = "";
+      }
+    };
+    input.addEventListener("input", () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => runSearch(false), 250);
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        runSearch(false);
+      }
+    });
+    searchBtn?.addEventListener("click", () => runSearch(false));
+    onlineBtn?.addEventListener("click", () => runSearch(true));
+    barcodeBtn?.addEventListener("click", () => {
+      callbacks.onScanRecipeBarcode?.((pickedFood) => {
+        if (pickedFood) onPickFood(pickedFood);
+      });
+    });
+  };
+
   const wireIngredientRowEvents = () => {
     container.querySelectorAll(".rec-ing-qty").forEach((inp) => {
       inp.addEventListener("input", () => {
@@ -382,11 +531,11 @@ export function renderRecipesSubview(container, recipeState, dashboard, uiState,
         }
       });
     });
-    container.querySelectorAll(".rec-ing-unit").forEach((inp) => {
-      inp.addEventListener("input", () => {
-        const idx = Number(inp.getAttribute("data-idx"));
+    container.querySelectorAll(".rec-ing-unit").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const idx = Number(sel.getAttribute("data-idx"));
         if (draft.ingredients[idx]) {
-          draft.ingredients[idx].unit = (inp.value || "g").trim();
+          draft.ingredients[idx].unit = (sel.value || "g").trim();
           refreshPreview();
         }
       });
@@ -400,14 +549,68 @@ export function renderRecipesSubview(container, recipeState, dashboard, uiState,
         }
       });
     });
+    container.querySelectorAll(".rec-ing-reassoc-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.getAttribute("data-idx"));
+        reassocIdx = reassocIdx === idx ? null : idx;
+        refreshIngList();
+      });
+    });
     container.querySelectorAll(".rec-ing-del").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = Number(btn.getAttribute("data-idx"));
         draft.ingredients.splice(idx, 1);
+        if (reassocIdx === idx) {
+          reassocIdx = null;
+        } else if (reassocIdx !== null && reassocIdx > idx) {
+          reassocIdx -= 1;
+        }
         refreshIngList();
         refreshPreview();
       });
     });
+
+    if (reassocIdx !== null && draft.ingredients[reassocIdx]) {
+      const targetIdx = reassocIdx;
+      container
+        .querySelector("#rec-reassoc-close-btn")
+        ?.addEventListener("click", () => {
+          reassocIdx = null;
+          refreshIngList();
+        });
+      wireRecipeFoodLookup({
+        input: container.querySelector("#rec-reassoc-search"),
+        searchBtn: container.querySelector("#rec-reassoc-local-btn"),
+        onlineBtn: container.querySelector("#rec-reassoc-online-btn"),
+        barcodeBtn: container.querySelector("#rec-reassoc-barcode-btn"),
+        resultsHost: container.querySelector("#rec-reassoc-results"),
+        freeTextKey: "recipe_use_free_text_btn",
+        onPickFood: (f) => {
+          const cur = draft.ingredients[targetIdx];
+          if (!cur) return;
+          draft.ingredients[targetIdx] = applyPickedFoodToIng(f, cur);
+          reassocIdx = null;
+          refreshIngList();
+          refreshPreview();
+        },
+        onPickFreeText: (cleanText) => {
+          const cur = draft.ingredients[targetIdx];
+          if (!cur) return;
+          draft.ingredients[targetIdx] = {
+            ...cur,
+            food_id: null,
+            name: cleanText,
+            matched_brand: null,
+            macros_per_100g: null,
+            food_portions: {},
+            person_portions: {},
+          };
+          reassocIdx = null;
+          refreshIngList();
+          refreshPreview();
+        },
+      });
+    }
   };
 
   const refreshIngList = () => {
@@ -451,69 +654,42 @@ export function renderRecipesSubview(container, recipeState, dashboard, uiState,
 
     const ingSearchInput = container.querySelector("#rec-ing-search");
     const ingResultsHost = container.querySelector("#rec-ing-results");
-    if (ingSearchInput && ingResultsHost && callbacks.api) {
-      let timer = null;
-      const runSearch = async () => {
-        const q = (ingSearchInput.value || "").trim();
-        if (q.length < 2) {
-          ingResultsHost.innerHTML = "";
-          return;
-        }
-        try {
-          const resp = await callbacks.api.searchFoods(personId, q, false, { limit: 8 });
-          const hits = resp?.foods || [];
-          if (!hits.length) {
-            ingResultsHost.innerHTML = `<div class="hint-text" style="padding:4px;">${escapeHtml(t(lang, "product_not_found"))}</div>`;
-            return;
-          }
-          ingResultsHost.innerHTML = hits
-            .map(
-              (f, idx) => `
-              <button type="button" class="edit-food-option rec-ing-pick" data-hit-idx="${idx}">
-                <span>
-                  <strong>${escapeHtml(localizedFoodName(f, lang))}</strong>
-                  ${f.brand ? ` <span class="pill">${escapeHtml(f.brand)}</span>` : ""}
-                </span>
-                <span class="meal-item-meta">${Math.round(f.macros_per_100g?.kcal || 0)} kcal · ${escapeHtml(t(lang, `state_${f.preparation_state}`) || f.preparation_state)}</span>
-              </button>
-            `
-            )
-            .join("");
-          ingResultsHost.querySelectorAll(".rec-ing-pick").forEach((optBtn) => {
-            optBtn.addEventListener("click", () => {
-              const f = hits[Number(optBtn.getAttribute("data-hit-idx"))];
-              if (!f) return;
-              const defState = ["raw", "cooked", "ready_to_eat"].includes(f.preparation_state)
-                ? f.preparation_state
-                : "ready_to_eat";
-              draft.ingredients.push({
-                food_id: f.food_id,
-                name: localizedFoodName(f, lang),
-                quantity: 100,
-                unit: "g",
-                state: defState,
-                macros_per_100g: f.macros_per_100g,
-                yield_factor: f.yield_factor || 1.0,
-                ref_state: f.preparation_state || "ready_to_eat",
-                food_portions: f.food_portions || {},
-                category: f.category || "other",
-              });
-              ingSearchInput.value = "";
-              ingResultsHost.innerHTML = "";
-              refreshIngList();
-              refreshPreview();
-            });
-          });
-        } catch (_err) {
-          ingResultsHost.innerHTML = "";
-        }
-      };
-      ingSearchInput.addEventListener("input", () => {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(runSearch, 250);
-      });
-      container.querySelector("#rec-ing-search-btn")?.addEventListener("click", runSearch);
-    }
+    wireRecipeFoodLookup({
+      input: ingSearchInput,
+      searchBtn: container.querySelector("#rec-ing-search-btn"),
+      onlineBtn: container.querySelector("#rec-ing-online-btn"),
+      barcodeBtn: container.querySelector("#rec-ing-barcode-btn"),
+      resultsHost: ingResultsHost,
+      freeTextKey: "recipe_add_free_text_btn",
+      onPickFood: (f) => {
+        draft.ingredients.push(applyPickedFoodToIng(f, null));
+        if (ingSearchInput) ingSearchInput.value = "";
+        if (ingResultsHost) ingResultsHost.innerHTML = "";
+        refreshIngList();
+        refreshPreview();
+      },
+      onPickFreeText: (cleanText) => {
+        draft.ingredients.push({
+          food_id: null,
+          name: cleanText,
+          raw_name: cleanText,
+          matched_brand: null,
+          category: "other",
+          food_portions: {},
+          person_portions: {},
+          quantity: 100,
+          unit: "g",
+          state: "unspecified",
+          macros_per_100g: null,
+          yield_factor: 1.0,
+          ref_state: "ready_to_eat",
+        });
+        if (ingSearchInput) ingSearchInput.value = "";
+        if (ingResultsHost) ingResultsHost.innerHTML = "";
+        refreshIngList();
+        refreshPreview();
+      },
+    });
 
     container.querySelector("#save-recipe-btn")?.addEventListener("click", () => {
       const cleanName = (draft.name || "").trim();

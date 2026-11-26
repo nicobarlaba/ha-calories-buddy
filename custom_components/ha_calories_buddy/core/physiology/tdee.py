@@ -52,6 +52,41 @@ def update_ema(prev_ema: float | None, value: float, alpha: float = 0.12) -> flo
     return round(alpha * float(value) + (1.0 - alpha) * float(prev_ema), 2)
 
 
+def recompute_biometric_emas(
+    snapshots: Sequence[BiometricSnapshot],
+) -> list[BiometricSnapshot]:
+    """Recompute chronological weight & body-fat EMAs across ordered snapshots.
+
+    Returns only the snapshots whose EMA fields need to be persisted/updated.
+    """
+    ordered = sorted(snapshots, key=lambda s: s.snap_date)
+    w_ema: float | None = None
+    bf_ema: float | None = None
+    changed: list[BiometricSnapshot] = []
+
+    for snap in ordered:
+        new_w_ema = snap.weight_ema_kg
+        if snap.weight_kg is not None:
+            w_ema = update_ema(w_ema, snap.weight_kg, alpha=0.12)
+            new_w_ema = w_ema
+
+        new_bf_ema = snap.body_fat_ema_pct
+        if snap.body_fat_pct is not None:
+            bf_ema = update_ema(bf_ema, snap.body_fat_pct, alpha=0.10)
+            new_bf_ema = bf_ema
+
+        if new_w_ema != snap.weight_ema_kg or new_bf_ema != snap.body_fat_ema_pct:
+            changed.append(
+                snap.model_copy(
+                    update={
+                        "weight_ema_kg": new_w_ema,
+                        "body_fat_ema_pct": new_bf_ema,
+                    }
+                )
+            )
+    return changed
+
+
 def calculate_static_tdee(
     bmr_kcal: float,
     bmr_formula: str,

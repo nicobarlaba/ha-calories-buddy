@@ -267,26 +267,25 @@ async def test_vault_pagination_categories_and_meal_slot_edit(
     profile = _make_profile(lang="it")
     await profile_repo.upsert_person(profile)
 
-    # Full pagination walk across all 88+ seeded foods
-    page1, total1 = await resolver.search_foods_paginated(
-        "", person_id="p_nico", limit=25, offset=0, language="it", include_external=False
-    )
-    page2, total2 = await resolver.search_foods_paginated(
-        "", person_id="p_nico", limit=25, offset=25, language="it", include_external=False
-    )
-    page3, total3 = await resolver.search_foods_paginated(
-        "", person_id="p_nico", limit=25, offset=50, language="it", include_external=False
-    )
-    page4, total4 = await resolver.search_foods_paginated(
-        "", person_id="p_nico", limit=25, offset=75, language="it", include_external=False
-    )
-    assert total1 == total2 == total3 == total4 >= 88
-    assert len(page1) == 25 and 25 < total1
-    assert len(page2) == 25 and 50 < total2
-    assert len(page3) == 25 and 75 < total3
-    assert len(page4) >= 13 and 75 + len(page4) == total4
-    all_ids = {f.food_id for f in [*page1, *page2, *page3, *page4]}
-    assert len(all_ids) == total1
+    # Full pagination walk across all seeded foods
+    all_ids: set[str] = set()
+    offset = 0
+    total_expected: int | None = None
+    while True:
+        page, page_total = await resolver.search_foods_paginated(
+            "", person_id="p_nico", limit=25, offset=offset, language="it", include_external=False
+        )
+        if total_expected is None:
+            total_expected = page_total
+        assert page_total == total_expected
+        if not page:
+            break
+        all_ids.update(f.food_id for f in page)
+        offset += len(page)
+        if offset >= page_total:
+            break
+    assert total_expected is not None and total_expected >= 250
+    assert len(all_ids) == total_expected
 
     # Category group filtering
     protein_foods, p_total = await food_repo.list_foods_paginated(

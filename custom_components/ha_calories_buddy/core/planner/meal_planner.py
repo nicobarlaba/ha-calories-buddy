@@ -1035,6 +1035,27 @@ class MealPlannerService:
                         language=profile.language,
                         llm_estimator=estimator,
                     )
+                    # For dry pantry staples (rice, pasta, grains, oats), prefer raw/dry
+                    # reference entries in meal plans so quantities match dry kitchen/shopping weights.
+                    if (
+                        food is not None
+                        and spec.preparation_state == PreparationState.COOKED
+                        and food.preparation_state == PreparationState.COOKED
+                        and food.category.lower() in ("rice", "pasta", "grains", "oats")
+                    ):
+                        raw_counterpart = await self._resolver.resolve_food_candidate(
+                            person_id=profile.person_id,
+                            name=spec.name,
+                            brand=spec.brand,
+                            state=PreparationState.RAW,
+                            language=profile.language,
+                            llm_estimator=None,
+                        )
+                        if (
+                            raw_counterpart is not None
+                            and raw_counterpart.preparation_state == PreparationState.RAW
+                        ):
+                            food = raw_counterpart
                     cache[cache_key] = food
 
                 resolved_foods.append(food)
@@ -1102,7 +1123,7 @@ class MealPlannerService:
     ) -> str:
         """Build a compact categorized list of verified Food Vault names for the Chef."""
         foods = await self._resolver.list_vault_foods(
-            person_id=profile.person_id, limit=120
+            person_id=profile.person_id, limit=600
         )
         if not foods:
             return ""

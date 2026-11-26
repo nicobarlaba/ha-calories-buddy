@@ -1,6 +1,13 @@
 /** Plan View: Menu | Workouts sub-tabs, 7-day strip, Generate Plan, Suggest Meal, Recipe modal */
 import { t } from "../i18n/index.js";
-import { escapeHtml, parseJsonSafe, pickDefaultSlotForNow, round1 } from "../utils.js";
+import {
+  escapeHtml,
+  isRecipeItem,
+  parseJsonSafe,
+  pickDefaultSlotForNow,
+  renderRecipeBadge,
+  round1,
+} from "../utils.js";
 import { renderWorkoutsSubview } from "./workouts-subview.js";
 
 function groupIngredientsByCourse(ingredients) {
@@ -30,7 +37,8 @@ function formatCompactIngLabel(ing, lang = "en") {
       stateHint = ` (${lbl})`;
     }
   }
-  return `${escapeHtml(name + stateHint)} ${round1(ing.grams)}g`;
+  const badge = isRecipeItem(ing) ? ` ${renderRecipeBadge(lang)}` : "";
+  return `${escapeHtml(name + stateHint)}${badge} ${round1(ing.grams)}g`;
 }
 
 function renderCompactIngredientsHtml(ingredients, lang = "en") {
@@ -81,7 +89,7 @@ function renderRecipeModal(host, lang, item) {
             .map(
               (ing) => `
             <div class="meal-item-row">
-              <span>${ing.course ? `<span class="course-tag">${escapeHtml(ing.course)}</span> ` : ""}<strong>${escapeHtml(ing.name)}</strong>${ing.brand ? ` <span class="pill">${escapeHtml(ing.brand)}</span>` : ""}</span>
+              <span>${ing.course ? `<span class="course-tag">${escapeHtml(ing.course)}</span> ` : ""}<strong>${escapeHtml(ing.name)}</strong>${ing.brand ? ` <span class="pill">${escapeHtml(ing.brand)}</span>` : ""}${isRecipeItem(ing) ? ` ${renderRecipeBadge(lang)}` : ""}</span>
               <span><strong>${round1(ing.grams)} g</strong> (${escapeHtml(t(lang, `state_${ing.preparation_state}`) || ing.preparation_state)})</span>
             </div>
           `

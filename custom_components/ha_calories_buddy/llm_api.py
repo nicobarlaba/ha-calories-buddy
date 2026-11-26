@@ -13,6 +13,9 @@ from homeassistant.helpers import llm
 from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonValueType
 
+from custom_components.ha_calories_buddy.biometrics_backfill import (
+    async_build_trends_for_person,
+)
 from custom_components.ha_calories_buddy.const import DOMAIN
 from custom_components.ha_calories_buddy.core.logging import get_logger, log_event
 from custom_components.ha_calories_buddy.core.models import (
@@ -23,9 +26,6 @@ from custom_components.ha_calories_buddy.core.models import (
     ShoppingDraft,
     ShoppingDraftItem,
     TrainingDayOverride,
-)
-from custom_components.ha_calories_buddy.core.physiology.trends import (
-    build_trends_summary,
 )
 from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
     compute_smart_slot_budget,
@@ -990,18 +990,18 @@ class ManageShoppingListTool(llm.Tool):
 
 
 class GetNutritionTrendsTool(llm.Tool):
-    """Assist tool returning 7/30/90d nutrition, weight EMA, adaptive TDEE, and ETA."""
+    """Assist tool returning 7/14/30/90d nutrition, weight EMA, adaptive TDEE, and ETA."""
 
     name = "get_nutrition_trends"
     title = "Get nutrition and weight trends"
     description = (
-        "Inspect 7, 30, or 90-day weight EMA trend, expected vs actual pace, "
+        "Inspect 7, 14, 30, or 90-day weight EMA trend, expected vs actual pace, "
         "goal ETA, adaptive TDEE confidence, calorie adherence, and average macros."
     )
     integration = DOMAIN
     parameters = vol.Schema(
         {
-            vol.Optional("days", default=30): vol.Coerce(int),
+            vol.Optional("days", default=14): vol.Coerce(int),
             vol.Optional("person"): str,
         }
     )
@@ -1012,7 +1012,7 @@ class GetNutritionTrendsTool(llm.Tool):
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
     ) -> llm.ToolResult:
-        """Compute and return 7/30/90d nutrition & body trend analytics."""
+        """Compute and return 7/14/30/90d nutrition & body trend analytics."""
         runtime: DomainRuntime = hass.data[DOMAIN]
         args = tool_input.tool_args
         try:
@@ -1022,26 +1022,10 @@ class GetNutritionTrendsTool(llm.Tool):
                 context_user_id=_user_id_from_llm_context(llm_context),
             )
             person_rt = runtime.persons.get(profile.person_id)
-            if person_rt is None or person_rt.coordinator.data is None:
+            if person_rt is None:
                 return llm.ToolResult(data={"error": "Person state not ready"}, error=True)
-            data = person_rt.coordinator.data
-            raw_days = int(args.get("days", 30))
-            norm_days = 7 if raw_days <= 10 else (30 if raw_days <= 45 else 90)
-            start_d = data.today - timedelta(days=norm_days - 1)
-            snaps = await runtime.profile_repo.get_biometric_snapshots_range(
-                profile.person_id, start_d, data.today
-            )
-            daily_macros = await runtime.meal_repo.get_daily_macros_range(
-                profile.person_id, start_d, data.today
-            )
-            summary = build_trends_summary(
-                profile=profile,
-                snapshots=snaps,
-                daily_macros=daily_macros,
-                current_tdee=data.tdee,
-                current_targets=data.targets,
-                today=data.today,
-                days=norm_days,
+            summary = await async_build_trends_for_person(
+                hass, runtime, person_rt, days=int(args.get("days", 14))
             )
         except Exception as exc:  # noqa: BLE001
             return llm.ToolResult(data={"error": str(exc)}, error=True)

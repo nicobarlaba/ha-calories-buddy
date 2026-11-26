@@ -336,6 +336,10 @@ async def test_recipe_ai_import_and_planner_opt_in_filtering(
         assert draft["serving_unit"] == "slice"
         assert len(draft["ingredients"]) == 3
         assert all(i["resolved"] is True for i in draft["ingredients"])
+        assert all(i["raw_name"] for i in draft["ingredients"])
+        egg_draft = next(i for i in draft["ingredients"] if "egg" in (i["food_id"] or ""))
+        assert "piece" in egg_draft["food_portions"]
+        assert egg_draft["category"] == "egg"
 
         # Save one opt-out recipe and one opt-in recipe
         rec_hidden = await recipe_service.save_recipe(
@@ -566,3 +570,45 @@ async def test_dynamic_plan_sync_rebalance_and_partial_day0_generation(
             await full_client._session.close()
     finally:
         await client._session.close()
+
+
+async def test_recipe_save_reassociated_and_freetext_ingredients(
+    recipe_ctx: dict[str, Any],
+) -> None:
+    """Verify recipe editor allows swapping to seed oil/new items and saving unlinked free text resolved by resolver."""
+    profile: PersonProfile = recipe_ctx["profile"]
+    recipe_service: RecipeService = recipe_ctx["recipe_service"]
+
+    rec = await recipe_service.save_recipe(
+        profile,
+        name="Torta casalinga con olio di semi",
+        category="snack",
+        servings=10,
+        serving_unit="slice",
+        ingredients=[
+            # Re-associated seed ingredient using tablespoon unit
+            RecipeIngredientInput(
+                food_id="seed_sunflower_oil",
+                name="Olio di Semi di Girasole",
+                quantity=6,
+                unit="tbsp",
+                state=PreparationState.READY_TO_EAT,
+            ),
+            # Unlinked free-text ingredient (no food_id -> resolver matches Vault flour_00!)
+            RecipeIngredientInput(
+                food_id=None,
+                name="Farina 00",
+                quantity=250,
+                unit="g",
+                state=PreparationState.RAW,
+            ),
+        ],
+    )
+    assert len(rec.ingredients) == 2
+    oil_ing = rec.ingredients[0]
+    flour_ing = rec.ingredients[1]
+    assert oil_ing.food_id == "seed_sunflower_oil"
+    assert oil_ing.grams == pytest.approx(60.0)
+    assert flour_ing.food_id == "seed_flour_00"
+    assert flour_ing.grams == pytest.approx(250.0)
+    assert rec.macros_per_serving.kcal > 100.0

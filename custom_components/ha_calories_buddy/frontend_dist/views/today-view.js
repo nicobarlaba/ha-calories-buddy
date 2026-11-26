@@ -4,8 +4,14 @@ import { t } from "../i18n/index.js";
 import {
   computeMacroPieSlices,
   escapeHtml,
+  estimateGramsForFoodUnit,
+  getDefaultUnitAndQty,
+  getUnitOptionsForFood,
+  isRecipeItem,
   localizedFoodName,
   parseJsonSafe,
+  renderRecipeBadge,
+  renderUnitSelectOptions,
   round1,
 } from "../utils.js";
 
@@ -136,7 +142,11 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
       selFood && ["raw", "cooked", "ready_to_eat"].includes(selFood.preparation_state)
         ? selFood.preparation_state
         : "ready_to_eat";
+    const addDef = getDefaultUnitAndQty(selFood);
+    const addUnitOptions = getUnitOptionsForFood(selFood, lang, addDef.unit);
     const safeId = escapeHtml(targetLogId);
+    const addGrams = selFood ? round1(estimateGramsForFoodUnit(addDef.quantity, addDef.unit, selFood)) : 0;
+    const addKcal = selFood ? Math.round((Number(selFood.macros_per_100g?.kcal || 0) * addGrams) / 100) : 0;
     return `
       <div class="add-item-box">
         ${
@@ -144,6 +154,7 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
             ? `<div class="controls-row" style="margin-bottom: 6px;">
                  <strong>${escapeHtml(localizedFoodName(selFood, lang))}</strong>
                  ${selFood.brand ? `<span class="pill">${escapeHtml(selFood.brand)}</span>` : ""}
+                 ${isRecipeItem(selFood) ? renderRecipeBadge(lang) : ""}
                  <span class="pill good">${Math.round(selFood.macros_per_100g?.kcal || 0)} kcal/100g</span>
                  <button type="button" class="chip-btn" id="clear-add-food-btn">✕</button>
                </div>`
@@ -155,8 +166,10 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
         </div>
         <div id="add-food-results-${safeId}" class="edit-food-results"></div>
         <div class="controls-row" style="margin-top: 6px;">
-          <input type="number" step="0.5" min="0.1" id="add-qty-${safeId}" value="100" style="width: 75px;" />
-          <input type="text" id="add-unit-${safeId}" value="g" style="width: 65px;" />
+          <input type="number" step="0.5" min="0.1" id="add-qty-${safeId}" value="${addDef.quantity}" style="width: 72px;" />
+          <select id="add-unit-${safeId}">
+            ${renderUnitSelectOptions(addUnitOptions, addDef.unit)}
+          </select>
           <select id="add-state-${safeId}">
             <option value="ready_to_eat" ${selState === "ready_to_eat" ? "selected" : ""}>${escapeHtml(t(lang, "state_ready_to_eat"))}</option>
             <option value="raw" ${selState === "raw" ? "selected" : ""}>${escapeHtml(t(lang, "state_raw"))}</option>
@@ -165,6 +178,11 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
           <button type="button" class="success confirm-add-item-btn" data-log-id="${safeId}">${escapeHtml(t(lang, "add_item_submit_btn"))}</button>
           <button type="button" class="secondary cancel-add-item-btn">${escapeHtml(t(lang, "cancel_btn"))}</button>
         </div>
+        ${
+          selFood
+            ? `<div id="add-approx-${safeId}" class="hint-text" style="margin-top: 4px;">${escapeHtml(t(lang, "unit_approx_preview", { grams: addGrams, kcal: addKcal }))}</div>`
+            : ""
+        }
       </div>
     `;
   };
@@ -188,15 +206,18 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
           const repFood = uiState.editReplacementFood || null;
           const activeName = repFood ? localizedFoodName(repFood, lang) : item.display_name;
           const activeBrand = repFood ? repFood.brand : item.brand;
+          const activeIsRecipe = repFood ? isRecipeItem(repFood) : isRecipeItem(item);
           const activeState = repFood && ["raw", "cooked", "ready_to_eat"].includes(repFood.preparation_state)
             ? repFood.preparation_state
             : item.input_state;
+          const editUnitOptions = getUnitOptionsForFood(repFood || null, lang, item.input_unit || "g");
           return `
             <div class="meal-item-row">
               <div style="flex: 1; min-width: 210px;">
                 <div class="controls-row">
                   <strong>${escapeHtml(activeName)}</strong>
                   ${activeBrand ? `<span class="pill">${escapeHtml(activeBrand)}</span>` : ""}
+                  ${activeIsRecipe ? renderRecipeBadge(lang) : ""}
                   ${
                     repFood
                       ? `<span class="pill good">${escapeHtml(t(lang, "replaced_badge"))}</span>
@@ -210,8 +231,10 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
                 </div>
                 <div id="edit-food-results-${escapeHtml(item.item_id)}" class="edit-food-results"></div>
                 <div class="controls-row" style="margin-top: 6px;">
-                  <input type="number" step="0.5" min="0.1" id="edit-qty-${escapeHtml(item.item_id)}" value="${item.input_quantity}" style="width: 75px;" />
-                  <input type="text" id="edit-unit-${escapeHtml(item.item_id)}" value="${escapeHtml(item.input_unit)}" style="width: 70px;" />
+                  <input type="number" step="0.5" min="0.1" id="edit-qty-${escapeHtml(item.item_id)}" value="${item.input_quantity}" style="width: 72px;" />
+                  <select id="edit-unit-${escapeHtml(item.item_id)}">
+                    ${renderUnitSelectOptions(editUnitOptions, item.input_unit || "g")}
+                  </select>
                   <select id="edit-state-${escapeHtml(item.item_id)}">
                     <option value="raw" ${activeState === "raw" ? "selected" : ""}>${escapeHtml(t(lang, "state_raw"))}</option>
                     <option value="cooked" ${activeState === "cooked" ? "selected" : ""}>${escapeHtml(t(lang, "state_cooked"))}</option>
@@ -230,6 +253,7 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
             <div>
               <span><strong>${escapeHtml(item.display_name)}</strong></span>
               ${item.brand ? `<span class="pill">${escapeHtml(item.brand)}</span>` : ""}
+              ${isRecipeItem(item) ? renderRecipeBadge(lang) : ""}
               ${warnBadge}
               <div class="meal-item-meta">
                 ${item.input_quantity} ${escapeHtml(item.input_unit)} (${escapeHtml(t(lang, `state_${item.input_state}`) || item.input_state)})
@@ -629,6 +653,7 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
             <span>
               <strong>${escapeHtml(localizedFoodName(f, lang))}</strong>
               ${f.brand ? ` <span class="pill">${escapeHtml(f.brand)}</span>` : ""}
+              ${isRecipeItem(f) ? ` ${renderRecipeBadge(lang)}` : ""}
             </span>
             <span class="meal-item-meta">${Math.round(f.macros_per_100g?.kcal || 0)} kcal · ${escapeHtml(t(lang, `state_${f.preparation_state}`) || f.preparation_state)}</span>
           </button>
@@ -670,6 +695,18 @@ export function renderTodayView(container, dashboard, uiState, callbacks) {
       container.querySelector(`#add-food-results-${aid}`),
       (chosen) => callbacks.onSelectAddFood?.(chosen)
     );
+    const updateAddApprox = () => {
+      const selF = uiState.addSelectedFood;
+      const host = container.querySelector(`#add-approx-${aid}`);
+      if (!selF || !host) return;
+      const qVal = Number(container.querySelector(`#add-qty-${aid}`)?.value || 0);
+      const uVal = (container.querySelector(`#add-unit-${aid}`)?.value || "g").trim();
+      const grams = round1(estimateGramsForFoodUnit(qVal, uVal, selF));
+      const kcal = Math.round((Number(selF.macros_per_100g?.kcal || 0) * grams) / 100);
+      host.textContent = t(lang, "unit_approx_preview", { grams, kcal });
+    };
+    container.querySelector(`#add-qty-${aid}`)?.addEventListener("input", updateAddApprox);
+    container.querySelector(`#add-unit-${aid}`)?.addEventListener("change", updateAddApprox);
   }
 
   container.querySelector("#toggle-manual-weight-btn")?.addEventListener("click", () => {

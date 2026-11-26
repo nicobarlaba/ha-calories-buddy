@@ -140,9 +140,10 @@ class FoodResolver:
             offset=safe_offset,
             language=language,
         )
+        has_usda = bool(self._usda is not None and getattr(self._usda, "enabled", True))
         if (
             not include_external
-            or self._off is None
+            or (self._off is None and not has_usda)
             or not query.strip()
             or safe_offset > 0
             or len(local) >= safe_limit
@@ -150,29 +151,42 @@ class FoodResolver:
         ):
             return local, total_count
 
-        external_items = await self._off.search(
-            query,
-            brand=brand,
-            language=language,
-            limit=max(1, safe_limit - len(local)),
-        )
         seen_ids = {f.food_id for f in local}
         seen_barcodes = {f.barcode_ean for f in local if f.barcode_ean}
         merged = list(local)
         added_ext = 0
-        for ext in external_items:
-            if ext.food_id in seen_ids or (
-                ext.barcode_ean and ext.barcode_ean in seen_barcodes
-            ):
-                continue
-            await self._food_repo.upsert_global_food(ext)
-            eff = await self._food_repo.get_effective_food(
-                ext.food_id, person_id=person_id
+
+        providers: list[FoodProvider] = []
+        if self._off is not None:
+            providers.append(self._off)
+        if has_usda and self._usda is not None:
+            providers.append(self._usda)
+
+        for provider in providers:
+            remaining = safe_limit - len(merged)
+            if remaining <= 0:
+                break
+            external_items = await provider.search(
+                query,
+                brand=brand,
+                language=language,
+                limit=remaining,
             )
-            if eff is not None:
-                merged.append(eff)
-                seen_ids.add(eff.food_id)
-                added_ext += 1
+            for ext in external_items:
+                if ext.food_id in seen_ids or (
+                    ext.barcode_ean and ext.barcode_ean in seen_barcodes
+                ):
+                    continue
+                await self._food_repo.upsert_global_food(ext)
+                eff = await self._food_repo.get_effective_food(
+                    ext.food_id, person_id=person_id
+                )
+                if eff is not None:
+                    merged.append(eff)
+                    seen_ids.add(eff.food_id)
+                    if eff.barcode_ean:
+                        seen_barcodes.add(eff.barcode_ean)
+                    added_ext += 1
         return merged[:safe_limit], total_count + added_ext
 
     async def list_vault_foods(

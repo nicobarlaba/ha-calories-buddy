@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 from homeassistant.components.lovelace.const import LOVELACE_DATA
 from homeassistant.core import HomeAssistant
 
-from custom_components.ha_calories_buddy.const import FRONTEND_CARD_URL
+from custom_components.ha_calories_buddy.const import FRONTEND_CARD_URL, VERSION
 from custom_components.ha_calories_buddy.frontend import (
     FRONTEND_DIR,
     async_register_frontend,
@@ -17,7 +17,9 @@ from custom_components.ha_calories_buddy.frontend import (
 
 
 def test_frontend_bundle_files_and_exports_exist() -> None:
-    """Verify modular ES frontend files exist with expected custom element hooks."""
+    """Verify modular ES frontend files exist with expected custom element hooks and v0.3.1 exports."""
+    assert VERSION == "0.3.1"
+    assert FRONTEND_CARD_URL.endswith("?v=0.3.1")
     expected_files = [
         "ha-calories-buddy-card.js",
         "api.js",
@@ -69,6 +71,17 @@ def test_frontend_bundle_files_and_exports_exist() -> None:
     )
     assert "export async function decodeBarcodeFromImageSource" in decoder_js
     assert "export function validateEanCheckDigit" in decoder_js
+
+    utils_js = (Path(FRONTEND_DIR) / "utils.js").read_text(encoding="utf-8")
+    assert "export function isRecipeItem" in utils_js
+    assert "export function renderRecipeBadge" in utils_js
+    assert "export function getUnitOptionsForFood" in utils_js
+    assert "export function getDefaultUnitAndQty" in utils_js
+
+    en_js = (Path(FRONTEND_DIR) / "i18n/en.js").read_text(encoding="utf-8")
+    it_js = (Path(FRONTEND_DIR) / "i18n/it.js").read_text(encoding="utf-8")
+    assert "trends_14d" in en_js and "trends_14d" in it_js
+    assert "recipe_reassociate_btn" in en_js and "recipe_reassociate_btn" in it_js
 
 
 async def test_async_register_frontend_registers_static_and_lovelace_resource(

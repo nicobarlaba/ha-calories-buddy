@@ -37,11 +37,13 @@ def build_trends_summary(
     current_tdee: TDEEResult,
     current_targets: TargetResult,
     today: date,
-    days: int = 30,
+    days: int = 14,
 ) -> TrendsSummary:
-    """Build contiguous 7/30/90d trend points, expected-vs-actual weight rate, and ETA."""
+    """Build contiguous 7/14/30/90d trend points, expected-vs-actual weight rate, and ETA."""
     if days <= 10:
         norm_days = 7
+    elif days <= 21:
+        norm_days = 14
     elif days <= 45:
         norm_days = 30
     else:

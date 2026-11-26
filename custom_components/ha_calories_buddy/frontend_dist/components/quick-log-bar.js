@@ -1,6 +1,17 @@
 /** Quick Meal Log Bar + Manual Search Modal with smart slot selection */
 import { t } from "../i18n/index.js";
-import { escapeHtml, localizedFoodName, pickDefaultSlotForNow, round1 } from "../utils.js";
+import {
+  escapeHtml,
+  estimateGramsForFoodUnit,
+  getDefaultUnitAndQty,
+  getUnitOptionsForFood,
+  isRecipeItem,
+  localizedFoodName,
+  pickDefaultSlotForNow,
+  renderRecipeBadge,
+  renderUnitSelectOptions,
+  round1,
+} from "../utils.js";
 
 export function renderQuickLogBar(container, state, callbacks) {
   const { language, llmEnabled, mealSlots, busy, selectedAiSlot } = state;
@@ -82,9 +93,32 @@ function openManualSearchModal(host, ctx, onLogItem) {
   const { language, slots, api, personId } = ctx;
   let searchResults = [];
   let selectedFood = null;
+  let selectedQty = 100;
+  let selectedUnit = "g";
   let chosenSlot = pickDefaultSlotForNow(slots);
 
+  const selectFoodItem = (food) => {
+    selectedFood = food || null;
+    const def = getDefaultUnitAndQty(selectedFood);
+    selectedQty = def.quantity;
+    selectedUnit = def.unit;
+  };
+
+  const renderApproxText = (qty, unit, food) => {
+    if (!food) return "";
+    const grams = round1(estimateGramsForFoodUnit(qty, unit, food));
+    const kcal = Math.round((Number(food.macros_per_100g?.kcal || 0) * grams) / 100);
+    return t(language, "unit_approx_preview", { grams, kcal });
+  };
+
   const renderModal = () => {
+    const unitOptions = selectedFood
+      ? getUnitOptionsForFood(selectedFood, language, selectedUnit)
+      : [];
+    const selState =
+      selectedFood && ["raw", "cooked", "ready_to_eat"].includes(selectedFood.preparation_state)
+        ? selectedFood.preparation_state
+        : "ready_to_eat";
     host.innerHTML = `
       <div class="modal-backdrop">
         <div class="modal-panel">
@@ -104,6 +138,7 @@ function openManualSearchModal(host, ctx, onLogItem) {
                   <div>
                     <strong>${escapeHtml(localizedFoodName(f, language))}</strong>
                     ${f.brand ? `<span class="pill">${escapeHtml(f.brand)}</span>` : ""}
+                    ${isRecipeItem(f) ? renderRecipeBadge(language) : ""}
                     <div class="meal-item-meta">
                       ${round1(f.macros_per_100g.kcal)} kcal | P ${round1(f.macros_per_100g.protein_g)}g C ${round1(f.macros_per_100g.carbs_g)}g F ${round1(f.macros_per_100g.fat_g)}g (${escapeHtml(t(language, "per_100g"))})
                     </div>
@@ -118,7 +153,11 @@ function openManualSearchModal(host, ctx, onLogItem) {
             selectedFood
               ? `
               <div class="meal-card">
-                <div style="font-weight: 600; margin-bottom: 8px;">${escapeHtml(localizedFoodName(selectedFood, language))}</div>
+                <div class="controls-row" style="font-weight: 600; margin-bottom: 8px;">
+                  <span>${escapeHtml(localizedFoodName(selectedFood, language))}</span>
+                  ${selectedFood.brand ? `<span class="pill">${escapeHtml(selectedFood.brand)}</span>` : ""}
+                  ${isRecipeItem(selectedFood) ? renderRecipeBadge(language) : ""}
+                </div>
                 <div class="quick-actions" style="margin-bottom: 8px;">
                   ${slots
                     .map(
@@ -131,19 +170,24 @@ function openManualSearchModal(host, ctx, onLogItem) {
                   <div class="form-field">
                     <label>${escapeHtml(t(language, "state_label"))}</label>
                     <select id="manual-state">
-                      <option value="raw" ${selectedFood.preparation_state === "raw" ? "selected" : ""}>${escapeHtml(t(language, "state_raw"))}</option>
-                      <option value="cooked" ${selectedFood.preparation_state === "cooked" ? "selected" : ""}>${escapeHtml(t(language, "state_cooked"))}</option>
-                      <option value="ready_to_eat" ${selectedFood.preparation_state === "ready_to_eat" ? "selected" : ""}>${escapeHtml(t(language, "state_ready_to_eat"))}</option>
+                      <option value="raw" ${selState === "raw" ? "selected" : ""}>${escapeHtml(t(language, "state_raw"))}</option>
+                      <option value="cooked" ${selState === "cooked" ? "selected" : ""}>${escapeHtml(t(language, "state_cooked"))}</option>
+                      <option value="ready_to_eat" ${selState === "ready_to_eat" ? "selected" : ""}>${escapeHtml(t(language, "state_ready_to_eat"))}</option>
                     </select>
                   </div>
                   <div class="form-field">
                     <label>${escapeHtml(t(language, "quantity_label"))}</label>
-                    <input type="number" step="0.5" min="0.1" id="manual-qty" value="100" />
+                    <input type="number" step="0.5" min="0.1" id="manual-qty" value="${selectedQty}" />
                   </div>
                   <div class="form-field">
                     <label>${escapeHtml(t(language, "unit_label"))}</label>
-                    <input type="text" id="manual-unit" value="g" />
+                    <select id="manual-unit">
+                      ${renderUnitSelectOptions(unitOptions, selectedUnit)}
+                    </select>
                   </div>
+                </div>
+                <div id="manual-approx-preview" class="hint-text" style="margin: 4px 0 8px;">
+                  ${escapeHtml(renderApproxText(selectedQty, selectedUnit, selectedFood))}
                 </div>
                 <button type="button" class="success" id="confirm-manual-log">${escapeHtml(t(language, "log_item_btn"))}</button>
               </div>
@@ -163,7 +207,7 @@ function openManualSearchModal(host, ctx, onLogItem) {
       if (!q) return;
       const resp = await api.searchFoods(personId, q, true, { limit: 25, offset: 0 });
       searchResults = resp.foods || [];
-      selectedFood = searchResults[0] || null;
+      selectFoodItem(searchResults[0] || null);
       renderModal();
       const qInput = host.querySelector("#manual-search-q");
       if (qInput) qInput.value = q;
@@ -180,10 +224,21 @@ function openManualSearchModal(host, ctx, onLogItem) {
     host.querySelectorAll(".pick-food-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = Number(btn.getAttribute("data-idx"));
-        selectedFood = searchResults[idx] || null;
+        selectFoodItem(searchResults[idx] || null);
         renderModal();
       });
     });
+
+    const updateManualPreview = () => {
+      selectedQty = Number(host.querySelector("#manual-qty")?.value || 0);
+      selectedUnit = (host.querySelector("#manual-unit")?.value || "g").trim();
+      const prevEl = host.querySelector("#manual-approx-preview");
+      if (prevEl && selectedFood) {
+        prevEl.textContent = renderApproxText(selectedQty, selectedUnit, selectedFood);
+      }
+    };
+    host.querySelector("#manual-qty")?.addEventListener("input", updateManualPreview);
+    host.querySelector("#manual-unit")?.addEventListener("change", updateManualPreview);
 
     host.querySelectorAll(".manual-slot-chip").forEach((chip) => {
       chip.addEventListener("click", () => {

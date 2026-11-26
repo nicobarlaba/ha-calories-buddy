@@ -70,7 +70,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
     };
     this._trendsState = {
       loaded: false,
-      days: 30,
+      days: 14,
       weightMetric: "weight",
       summary: null,
     };
@@ -387,7 +387,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
     }
   }
 
-  async _loadTrends(days = this._trendsState.days || 30) {
+  async _loadTrends(days = this._trendsState.days || 14) {
     if (!this._api || !this._activePersonId) return;
     try {
       const resp = await this._api.getTrends(this._activePersonId, days);
@@ -621,6 +621,24 @@ class HaCaloriesBuddyCard extends HTMLElement {
 
     const viewHost = this.shadowRoot.querySelector("#view-host");
     if (!viewHost || !this._dashboard) return;
+
+    const openBarcodeForRecipe = (onPicked) => {
+      openBarcodeScannerModal(
+        this.shadowRoot.querySelector("#barcode-modal-host"),
+        {
+          language: lang,
+          api: this._api,
+          personId: this._activePersonId,
+          mealSlots: this._dashboard?.person?.meal_slots || [],
+          pickOnly: true,
+        },
+        {
+          onSelectFood: async (food) => {
+            if (food) await onPicked?.(food);
+          },
+        }
+      );
+    };
 
     const openBarcode = () => {
       openBarcodeScannerModal(
@@ -1002,6 +1020,7 @@ class HaCaloriesBuddyCard extends HTMLElement {
           },
           onSearchVault: (q, cat = "all", off = 0) => this._loadVault(q, cat, off),
           onOpenBarcode: openBarcode,
+          onScanRecipeBarcode: openBarcodeForRecipe,
           onToggleAddForm: () => {
             this._vaultState.showAddForm = !this._vaultState.showAddForm;
             this._render();
@@ -1060,6 +1079,11 @@ class HaCaloriesBuddyCard extends HTMLElement {
                 return {
                   food_id: ing.food_id || null,
                   name: ing.display_name || "",
+                  raw_name: null,
+                  matched_brand: null,
+                  category: "other",
+                  food_portions: {},
+                  person_portions: {},
                   quantity: ing.input_quantity || g,
                   unit: ing.input_unit || "g",
                   state: ing.input_state || "unspecified",
@@ -1097,6 +1121,11 @@ class HaCaloriesBuddyCard extends HTMLElement {
                   ingredients: (parsed.ingredients || []).map((i) => ({
                     food_id: i.food_id || null,
                     name: i.name || "",
+                    raw_name: i.raw_name || null,
+                    matched_brand: i.matched_brand || null,
+                    category: i.category || "other",
+                    food_portions: i.food_portions || {},
+                    person_portions: i.person_portions || {},
                     quantity: i.quantity || 100,
                     unit: i.unit || "g",
                     state: i.state || "unspecified",

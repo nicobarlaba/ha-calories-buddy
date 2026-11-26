@@ -272,6 +272,33 @@ export const CARD_STYLES = `
     background: rgba(219, 68, 55, 0.15);
     color: var(--error-color, #db4437);
   }
+  .pill.recipe-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(240, 165, 0, 0.15);
+    border: 1px solid rgba(240, 165, 0, 0.45);
+    color: var(--primary-text-color);
+    font-weight: 600;
+  }
+  .moleskine-ico {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    display: inline-block;
+  }
+  .recipe-ing-sub {
+    font-size: 0.74rem;
+    color: var(--secondary-text-color);
+    margin-top: 2px;
+  }
+  .recipe-reassoc-box {
+    margin-top: 6px;
+    padding: 8px;
+    border: 1px dashed var(--divider-color, rgba(127, 127, 127, 0.35));
+    border-radius: 8px;
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.04));
+  }
   .section-title {
     font-size: 0.92rem;
     font-weight: 600;

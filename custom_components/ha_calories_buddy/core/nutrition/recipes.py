@@ -330,10 +330,17 @@ class RecipeService:
             draft_ingredients.append(
                 {
                     "food_id": food.food_id if food is not None else None,
+                    "raw_name": ing.name.strip(),
                     "name": (
                         food.localized_name(profile.language)
                         if food is not None
                         else ing.name.strip()
+                    ),
+                    "matched_brand": (food.brand if food is not None else None),
+                    "category": (food.category if food is not None else "other"),
+                    "food_portions": (dict(food.food_portions) if food is not None else {}),
+                    "person_portions": (
+                        dict(food.person_portions) if food is not None else {}
                     ),
                     "quantity": float(ing.quantity),
                     "unit": canon_unit,

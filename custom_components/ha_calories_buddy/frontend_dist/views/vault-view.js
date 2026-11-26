@@ -1,6 +1,12 @@
 /** Food Vault View: Foods catalog & Homemade Recipes archive */
 import { t } from "../i18n/index.js";
-import { escapeHtml, localizedFoodName, round1 } from "../utils.js";
+import {
+  escapeHtml,
+  isRecipeItem,
+  localizedFoodName,
+  renderRecipeBadge,
+  round1,
+} from "../utils.js";
 import { renderRecipesSubview } from "./recipes-subview.js";
 
 const VAULT_CATEGORIES = [
@@ -192,7 +198,7 @@ export function renderVaultView(
             <div>
               <strong>${escapeHtml(localizedFoodName(f, lang))}</strong>
               ${f.brand ? `<span class="pill">${escapeHtml(f.brand)}</span>` : ""}
-              ${f.source === "recipe" ? `<span class="pill">📖 ${escapeHtml(t(lang, "recipe_badge"))}</span>` : ""}
+              ${isRecipeItem(f) ? renderRecipeBadge(lang) : ""}
               ${f.verified ? `<span class="pill good">${escapeHtml(t(lang, "verified_badge"))}</span>` : ""}
               ${f.has_override ? `<span class="pill">${escapeHtml(t(lang, "override_badge"))}</span>` : ""}
               ${f.atwater_warning ? `<span class="pill warn">⚠️</span>` : ""}

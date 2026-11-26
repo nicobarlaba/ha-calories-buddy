@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -83,6 +84,8 @@ class PersonRuntimeData:
     profile: PersonProfile
     llm_config: LLMConfig | None
     coordinator: PersonNutritionCoordinator
+    backfilled_days: int = 0
+    backfill_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 @dataclass

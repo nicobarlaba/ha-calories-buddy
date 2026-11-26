@@ -1,4 +1,5 @@
-/** Shared HTML escaping, slot inference, localization, and macro pie math */
+/** Shared HTML escaping, slot inference, localization, recipe badges, unit options, and macro pie math */
+import { t } from "./i18n/index.js";
 
 export function escapeHtml(value) {
   if (value === null || value === undefined) return "";
@@ -88,4 +89,178 @@ export function parseJsonSafe(raw, fallback) {
   } catch {
     return fallback;
   }
+}
+
+export function isRecipeItem(item) {
+  if (!item) return false;
+  return (
+    item.source === "recipe" ||
+    String(item.food_id || "").startsWith("recipe_")
+  );
+}
+
+export function renderRecipeBadge(lang = "en") {
+  const label = t(lang, "recipe_badge") || "Recipe";
+  return `<span class="pill recipe-pill" title="${escapeHtml(label)}"><svg class="moleskine-ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="1.5" width="10.5" height="13" rx="1.8" fill="#4a3525" stroke="currentColor" stroke-width="0.9"/><line x1="4.6" y1="1.8" x2="4.6" y2="14.2" stroke="rgba(255,255,255,0.35)" stroke-width="0.8"/><line x1="10.7" y1="1.7" x2="10.7" y2="14.3" stroke="#f0a500" stroke-width="1.35"/><path d="M7.5 14v1.8l1-.6 1 .6V14z" fill="#f0a500"/></svg><span>${escapeHtml(label)}</span></span>`;
+}
+
+export const CATEGORY_UNIT_DEFAULTS_G = {
+  oil: { tbsp: 10.0, tsp: 4.0 },
+  dairy: { cup: 240.0, tbsp: 15.0, tsp: 5.0, pack: 150.0 },
+  egg: { piece: 55.0 },
+  bread: { slice: 35.0, piece: 60.0 },
+  legumes: { can: 240.0, tbsp: 20.0 },
+  fish: { can: 56.0, piece: 150.0 },
+  poultry: { piece: 150.0, slice: 20.0 },
+  fruit: { piece: 150.0 },
+  vegetables: { piece: 120.0 },
+  nuts: { tbsp: 15.0, tsp: 5.0, piece: 3.0 },
+  snack: { tbsp: 18.0, tsp: 6.0, serving: 30.0 },
+  beverage: { cup: 200.0, pack: 200.0 },
+  pasta: { serving: 80.0 },
+  rice: { serving: 80.0 },
+  grains: { serving: 80.0 },
+  oats: { tbsp: 10.0, serving: 40.0 },
+  other: { tbsp: 15.0, tsp: 5.0, cup: 200.0, serving: 100.0 },
+};
+
+const UNIT_LABEL_KEYS = {
+  g: "unit_g",
+  ml: "unit_ml",
+  tbsp: "unit_tbsp",
+  tsp: "unit_tsp",
+  cup: "unit_cup",
+  piece: "unit_piece",
+  slice: "unit_slice",
+  serving: "unit_serving",
+  can: "unit_can",
+  pack: "unit_pack",
+};
+
+const LIQUID_OR_SEMILIQUID_CATS = new Set(["oil", "dairy", "beverage"]);
+
+export function getFoodUnitGrams(unit, food) {
+  const u = String(unit || "g").trim().toLowerCase();
+  if (u === "g") return 1;
+  if (u === "kg") return 1000;
+  if (u === "oz") return 28.3495;
+  if (u === "lb") return 453.592;
+  const cat = String(food?.category || "other").toLowerCase();
+  if (u === "ml") return cat === "oil" ? 0.92 : 1.0;
+  if (u === "l") return cat === "oil" ? 920.0 : 1000.0;
+  if (food?.person_portions && typeof food.person_portions[u] === "number") {
+    return food.person_portions[u];
+  }
+  if (food?.food_portions && typeof food.food_portions[u] === "number") {
+    return food.food_portions[u];
+  }
+  const catPortions = CATEGORY_UNIT_DEFAULTS_G[cat] || {};
+  if (typeof catPortions[u] === "number") return catPortions[u];
+  if (typeof CATEGORY_UNIT_DEFAULTS_G.other[u] === "number") {
+    return CATEGORY_UNIT_DEFAULTS_G.other[u];
+  }
+  return 100;
+}
+
+export function estimateGramsForFoodUnit(qty, unit, food) {
+  const n = Number(qty || 0);
+  if (n <= 0) return 0;
+  return n * getFoodUnitGrams(unit, food);
+}
+
+export function formatUnitLabel(unit, gramsPerUnit, lang = "en") {
+  const u = String(unit || "g").trim().toLowerCase();
+  const key = UNIT_LABEL_KEYS[u];
+  const base = key ? t(lang, key) : u;
+  if (u === "g" || u === "ml" || !gramsPerUnit) return base;
+  return `${base} (${round1(gramsPerUnit)}g)`;
+}
+
+export function getUnitOptionsForFood(food, lang = "en", currentUnit = null) {
+  const optionsMap = new Map();
+  const addOpt = (u, grams) => {
+    const clean = String(u || "").trim().toLowerCase();
+    if (!clean || optionsMap.has(clean)) return;
+    optionsMap.set(clean, {
+      value: clean,
+      gramsPerUnit: Number(grams || 0),
+      label: formatUnitLabel(clean, grams, lang),
+    });
+  };
+
+  if (food?.person_portions) {
+    for (const [u, g] of Object.entries(food.person_portions)) addOpt(u, g);
+  }
+  if (food?.food_portions) {
+    for (const [u, g] of Object.entries(food.food_portions)) addOpt(u, g);
+  }
+
+  const cat = String(food?.category || "").toLowerCase();
+  if (cat && CATEGORY_UNIT_DEFAULTS_G[cat]) {
+    for (const [u, g] of Object.entries(CATEGORY_UNIT_DEFAULTS_G[cat])) {
+      addOpt(u, g);
+    }
+  }
+
+  addOpt("g", 1);
+  if (LIQUID_OR_SEMILIQUID_CATS.has(cat) || currentUnit === "ml") {
+    addOpt("ml", cat === "oil" ? 0.92 : 1.0);
+  }
+
+  if (!cat) {
+    addOpt("piece", 55);
+    addOpt("tbsp", 12);
+    addOpt("tsp", 5);
+    addOpt("slice", 30);
+    addOpt("serving", 100);
+  }
+
+  if (currentUnit) {
+    const cleanCur = String(currentUnit).trim().toLowerCase();
+    if (cleanCur && !optionsMap.has(cleanCur)) {
+      addOpt(cleanCur, getFoodUnitGrams(cleanCur, food));
+    }
+  }
+  return Array.from(optionsMap.values());
+}
+
+export function renderUnitSelectOptions(options, selectedUnit = "g") {
+  const normSel = String(selectedUnit || "g").trim().toLowerCase();
+  return options
+    .map(
+      (opt) =>
+        `<option value="${escapeHtml(opt.value)}" ${opt.value === normSel ? "selected" : ""}>${escapeHtml(opt.label)}</option>`
+    )
+    .join("");
+}
+
+export function getDefaultUnitAndQty(food, { preferGramsForBulk = false } = {}) {
+  if (!food) return { unit: "g", quantity: 100 };
+  const cat = String(food.category || "").toLowerCase();
+  const merged = { ...(food.food_portions || {}), ...(food.person_portions || {}) };
+  const keys = Object.keys(merged);
+
+  if (isRecipeItem(food)) {
+    const recUnit = keys.find((k) => ["slice", "piece", "serving"].includes(k)) || "serving";
+    return { unit: recUnit, quantity: 1 };
+  }
+  if (cat === "egg") {
+    return { unit: "piece", quantity: 1 };
+  }
+  if (preferGramsForBulk) {
+    if (cat === "fruit" && merged.piece) return { unit: "piece", quantity: 1 };
+    return { unit: "g", quantity: 100 };
+  }
+  if (cat === "oil") {
+    return { unit: merged.tbsp || cat === "oil" ? "tbsp" : "g", quantity: 1 };
+  }
+  if (cat === "beverage" && merged.cup) {
+    return { unit: "cup", quantity: 1 };
+  }
+  for (const preferred of ["piece", "slice", "can", "pack", "cup", "tbsp", "serving"]) {
+    if (typeof merged[preferred] === "number" && merged[preferred] > 0) {
+      return { unit: preferred, quantity: 1 };
+    }
+  }
+  return { unit: "g", quantity: 100 };
 }

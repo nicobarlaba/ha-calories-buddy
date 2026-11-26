@@ -36,6 +36,9 @@ UNIT_ALIASES: dict[str, str] = {
     "cups": "cup",
     "tazza": "cup",
     "tazze": "cup",
+    "glass": "cup",
+    "bicchiere": "cup",
+    "bicchieri": "cup",
     "slice": "slice",
     "slices": "slice",
     "fetta": "slice",
@@ -82,6 +85,11 @@ CATEGORY_DEFAULT_PORTIONS_G: dict[str, dict[str, float]] = {
     "vegetables": {"piece": 120.0},
     "nuts": {"tbsp": 15.0, "tsp": 5.0, "piece": 3.0},
     "snack": {"tbsp": 18.0, "tsp": 6.0, "serving": 30.0},
+    "beverage": {"cup": 200.0, "pack": 200.0},
+    "pasta": {"serving": 80.0},
+    "rice": {"serving": 80.0},
+    "grains": {"serving": 80.0},
+    "oats": {"tbsp": 10.0, "serving": 40.0},
     "other": {"tbsp": 15.0, "tsp": 5.0, "cup": 200.0, "serving": 100.0},
 }
 

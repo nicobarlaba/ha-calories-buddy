@@ -16,6 +16,9 @@ from homeassistant.components.websocket_api.decorators import (
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from custom_components.ha_calories_buddy.biometrics_backfill import (
+    async_build_trends_for_person,
+)
 from custom_components.ha_calories_buddy.const import DOMAIN
 from custom_components.ha_calories_buddy.core.models import (
     FoodItem,
@@ -45,9 +48,6 @@ from custom_components.ha_calories_buddy.core.nutrition.recipes import (
 )
 from custom_components.ha_calories_buddy.core.nutrition.yield_factors import (
     default_yield_for_category,
-)
-from custom_components.ha_calories_buddy.core.physiology.trends import (
-    build_trends_summary,
 )
 from custom_components.ha_calories_buddy.core.planner.macro_scaler import (
     compute_smart_slot_budget,
@@ -1607,7 +1607,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         {
             "type": f"{DOMAIN}/get_trends",
             vol.Optional("person_id"): str,
-            vol.Optional("days", default=30): vol.Coerce(int),
+            vol.Optional("days", default=14): vol.Coerce(int),
         }
     )
     @async_response
@@ -1624,30 +1624,13 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         if person_rt is None:
             connection.send_error(msg["id"], "not_loaded", "Person not active")
             return
-        if person_rt.coordinator.data is None:
-            await person_rt.coordinator.async_refresh()
-        data = person_rt.coordinator.data
-        if data is None:
-            connection.send_error(msg["id"], "no_data", "Dashboard state unavailable")
+        try:
+            summary = await async_build_trends_for_person(
+                hass, runtime, person_rt, days=int(msg.get("days", 14))
+            )
+        except RuntimeError as exc:
+            connection.send_error(msg["id"], "no_data", str(exc))
             return
-        raw_days = int(msg.get("days", 30))
-        norm_days = 7 if raw_days <= 10 else (30 if raw_days <= 45 else 90)
-        start_d = data.today - timedelta(days=norm_days - 1)
-        snaps = await runtime.profile_repo.get_biometric_snapshots_range(
-            profile.person_id, start_d, data.today
-        )
-        daily_macros = await runtime.meal_repo.get_daily_macros_range(
-            profile.person_id, start_d, data.today
-        )
-        summary = build_trends_summary(
-            profile=profile,
-            snapshots=snaps,
-            daily_macros=daily_macros,
-            current_tdee=data.tdee,
-            current_targets=data.targets,
-            today=data.today,
-            days=norm_days,
-        )
         connection.send_result(msg["id"], {"trends": summary.model_dump(mode="json")})
 
     @websocket_command(

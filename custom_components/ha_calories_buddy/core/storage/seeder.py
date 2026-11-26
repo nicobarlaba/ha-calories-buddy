@@ -64,6 +64,36 @@ async def seed_database_if_empty(db: Database) -> int:
                         (name_it, aliases_text, food_id),
                     )
                     backfilled += 1
+                # Ensure any newly added seed portions exist on already-seeded rows
+                seed_portions = item.get("portions", [])
+                if existing["source"] == "seed" and seed_portions:
+                    async with conn.execute(
+                        "SELECT unit_name FROM food_portions WHERE food_id = ?",
+                        (food_id,),
+                    ) as pcursor:
+                        existing_units = {
+                            str(pr["unit_name"]).lower()
+                            for pr in await pcursor.fetchall()
+                        }
+                    for portion in seed_portions:
+                        u_name = portion["unit_name"].lower()
+                        if u_name not in existing_units:
+                            await conn.execute(
+                                """
+                                INSERT OR IGNORE INTO food_portions (
+                                    portion_id, food_id, unit_name, grams, description
+                                ) VALUES (?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    str(uuid.uuid4()),
+                                    food_id,
+                                    u_name,
+                                    float(portion["grams"]),
+                                    portion.get("description", ""),
+                                ),
+                            )
+                            existing_units.add(u_name)
+                            backfilled += 1
                 continue
 
             await conn.execute(
